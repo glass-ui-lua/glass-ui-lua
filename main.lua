@@ -1,21 +1,32 @@
 --// Liquid Glass UI Library for Roblox
---// Frosted glass panels, soft sheen gradients and rim strokes, with a
---// WindUI-style API. Grown out of the SAB Base Scanner glass toolkit.
+--// Apple-style liquid glass: a page backdrop with ambient colour, colorless
+--// 6% glass panels with a polished rim, grouped cards with transparent rows,
+--// and menu / modal tiers that stay readable. WindUI-style API.
 --//
---//   local LiquidGlass = loadstring(game:HttpGet("https://raw.githubusercontent.com/<you>/LiquidGlass/main/main.lua"))()
---//   local Window = LiquidGlass:CreateWindow({ Title = "My Script", Author = "me", Blur = true })
+--//   local LiquidGlass = loadstring(game:HttpGet("https://raw.githubusercontent.com/glass-ui-lua/glass-ui-lua/refs/heads/main/main.lua"))()
+--//   local Window = LiquidGlass:CreateWindow({ Title = "My Script", Author = "me" })
 --//   local Tab    = Window:Tab({ Title = "Main" })
+--//   Tab:Section({ Title = "General" })
 --//   Tab:Toggle({ Title = "Enabled", Value = false, Callback = function(v) print(v) end })
 --//
+--// Glass recipe (what each layer is):
+--//   page    the window shell: page colour + ambient mesh glows + BlurEffect
+--//   panel   colorless white->gray tint at 6% alpha, rim (bright top edge,
+--//           hairline, faint bottom) and a theme-flipping 1px border
+--//   chip    same tint, top rim only, pill radius: buttons, pills, badges
+--//   menu    55% wash of the overlay surface: dropdowns, tooltips, toasts
+--//   modal   frost (white in light, black in dark) over the tint: dialogs
+--// Rows inside a card paint no surface of their own (hairline separators).
+--//
 --// Elements : Section, Label, Paragraph, Divider, Button, Toggle, Slider,
---//            Dropdown (single / multi), Input, Keybind, ColorPicker, Progress,
---//            Custom, List, Grid
+--//            Dropdown (single / multi / search), Input, Keybind, ColorPicker,
+--//            Progress, Custom, List, Grid
 --// Window   : Tab, NavButton, Dialog, Notify, SetStatus, SetTitle, SetToggleKey,
---//            Minimize, Open / Close / Toggle, Resize, Destroy, AddSettingsTab,
---//            SaveConfig / LoadConfig / ListConfigs / AutoSave
+--//            Minimize, Open / Close / Toggle, Resize, Destroy, OnDestroy,
+--//            AddSettingsTab, SaveConfig / LoadConfig / ListConfigs / AutoSave
 --// Library  : CreateWindow, Notify, SetTheme (live), AddTheme, GetFlag,
---//            DestroyAll, Creator (raw glass toolkit: Glass, Button, Label,
---//            Switch, TextBox, Scroller, SectionTitle, Badge, Draggable, Tween)
+--//            DestroyAll, Creator (raw toolkit: Glass, Button, Label, Switch,
+--//            TextBox, Scroller, SectionTitle, Badge, Mesh, Draggable, Tween)
 --// Elements : :Set, :Get, :SetTitle, :SetDesc, :SetVisible, :Lock, :Unlock,
 --//            :SetCallback, :Destroy
 
@@ -30,7 +41,7 @@ local HttpService       = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
 
 local LiquidGlass = {
-    Version = "1.1.0",
+    Version = "2.0.0",
     Windows = {},
     Flags   = {},
     Themes  = {},
@@ -38,7 +49,14 @@ local LiquidGlass = {
     Creator = {},
 }
 
-local FONT, FONT_MED, FONT_BOLD = Enum.Font.Gotham, Enum.Font.GothamMedium, Enum.Font.GothamBold
+-- SF-Pro-like system face
+local FONT      = Enum.Font.BuilderSans
+local FONT_MED  = Enum.Font.BuilderSansMedium
+local FONT_BOLD = Enum.Font.BuilderSansBold
+
+-- soft radial glow / shadow sprites (invisible if the asset can't load)
+local GLOW_IMAGE   = "rbxassetid://6015897843"
+local SHADOW_IMAGE = "rbxassetid://6014261993"
 
 -- file API (executor dependent, all optional)
 local f_write    = writefile  or (syn and syn.writefile)
@@ -51,58 +69,59 @@ local f_list     = listfiles
 local function warnf(...) warn("[LiquidGlass]", ...) end
 
 --==================================================================--
---  Themes
+--  Themes (tokens mirror the liquid-glass stylesheet)
 --==================================================================--
 
 local function theme(t)
-    t.Sheen  = t.Sheen  or Color3.fromRGB(255, 255, 255)
-    t.Rim    = t.Rim    or Color3.fromRGB(255, 255, 255)
-    t.White  = Color3.fromRGB(255, 255, 255)
-    t.Green  = t.Green  or Color3.fromRGB(70, 210, 140)
-    t.Red    = t.Red    or Color3.fromRGB(240, 90, 110)
-    t.Gold   = t.Gold   or Color3.fromRGB(255, 205, 90)
-    t.Orange = t.Orange or Color3.fromRGB(255, 165, 60)
-    t.Off    = t.Off    or Color3.fromRGB(70, 68, 85)
-    t.WindowTransparency = t.WindowTransparency or 0.12
+    -- colorless glass: identical in both themes, only the frame changes
+    t.TintTop    = t.TintTop    or Color3.fromRGB(255, 255, 255)
+    t.TintBottom = t.TintBottom or Color3.fromRGB(179, 179, 179)
+    t.TintT      = t.TintT      or 0.94    -- 6% alpha
+    t.TintHoverT = t.TintHoverT or 0.89    -- 11% alpha
+    t.Rim        = t.Rim        or Color3.fromRGB(255, 255, 255)
+    t.RimTopT    = t.RimTopT    or 0.5
+    t.White      = Color3.fromRGB(255, 255, 255)
+    t.Black      = Color3.fromRGB(0, 0, 0)
+    t.Green      = t.Green      or Color3.fromRGB(52, 199, 89)
+    t.Red        = t.Red        or Color3.fromRGB(255, 69, 58)
+    t.Gold       = t.Gold       or Color3.fromRGB(255, 214, 10)
+    t.Orange     = t.Orange     or Color3.fromRGB(255, 159, 10)
+    t.Off        = t.Off        or Color3.fromRGB(120, 120, 128)
+    t.OffT       = t.OffT       or 0.7
+    t.AccentHi   = t.AccentHi   or t.Accent:Lerp(Color3.new(1, 1, 1), 0.25)
+    t.WindowTransparency = t.WindowTransparency or 0.15
     return t
 end
 
 LiquidGlass.Themes.Dark = theme({
     Name = "Dark",
-    Accent = Color3.fromRGB(120, 110, 255), AccentHi = Color3.fromRGB(165, 155, 255),
-    Text = Color3.fromRGB(245, 244, 255), Secondary = Color3.fromRGB(205, 202, 225), Muted = Color3.fromRGB(135, 132, 158),
-    Panel = Color3.fromRGB(16, 15, 24), Base = Color3.fromRGB(9, 8, 15),
-})
-LiquidGlass.Themes.Ocean = theme({
-    Name = "Ocean",
-    Accent = Color3.fromRGB(60, 160, 255), AccentHi = Color3.fromRGB(120, 200, 255),
-    Text = Color3.fromRGB(240, 246, 255), Secondary = Color3.fromRGB(195, 210, 230), Muted = Color3.fromRGB(125, 140, 165),
-    Panel = Color3.fromRGB(10, 18, 30), Base = Color3.fromRGB(6, 12, 22),
-})
-LiquidGlass.Themes.Rose = theme({
-    Name = "Rose",
-    Accent = Color3.fromRGB(255, 100, 150), AccentHi = Color3.fromRGB(255, 150, 190),
-    Text = Color3.fromRGB(255, 244, 248), Secondary = Color3.fromRGB(230, 200, 215), Muted = Color3.fromRGB(165, 130, 150),
-    Panel = Color3.fromRGB(24, 12, 20), Base = Color3.fromRGB(16, 8, 14),
-})
-LiquidGlass.Themes.Emerald = theme({
-    Name = "Emerald",
-    Accent = Color3.fromRGB(60, 200, 140), AccentHi = Color3.fromRGB(120, 235, 180),
-    Text = Color3.fromRGB(240, 255, 248), Secondary = Color3.fromRGB(195, 225, 210), Muted = Color3.fromRGB(120, 155, 140),
-    Panel = Color3.fromRGB(10, 22, 18), Base = Color3.fromRGB(6, 14, 12),
-})
-LiquidGlass.Themes.Amber = theme({
-    Name = "Amber",
-    Accent = Color3.fromRGB(255, 170, 60), AccentHi = Color3.fromRGB(255, 205, 120),
-    Text = Color3.fromRGB(255, 250, 240), Secondary = Color3.fromRGB(230, 215, 190), Muted = Color3.fromRGB(165, 145, 120),
-    Panel = Color3.fromRGB(24, 18, 10), Base = Color3.fromRGB(16, 12, 6),
+    PageBg = Color3.fromRGB(10, 10, 12), Text = Color3.fromRGB(237, 237, 240),
+    Secondary = Color3.fromRGB(190, 190, 200), Muted = Color3.fromRGB(142, 142, 152),
+    Border = Color3.fromRGB(255, 255, 255), BorderT = 0.92,
+    SeparatorT = 0.92,
+    MenuSurface = Color3.fromRGB(22, 22, 27), MenuT = 0.45,
+    ModalFrost = Color3.fromRGB(0, 0, 0), ModalFrostT = 0.7,
+    Scrim = Color3.fromRGB(0, 0, 0), ScrimT = 0.45,
+    Accent = Color3.fromRGB(99, 102, 241),
+    MeshViolet = Color3.fromRGB(139, 92, 246), MeshPink = Color3.fromRGB(236, 72, 153), MeshCyan = Color3.fromRGB(6, 182, 212),
+    MeshCornerTop = Color3.fromRGB(99, 102, 241), MeshCornerBottom = Color3.fromRGB(79, 70, 229),
+    MeshT = 0.72,
+    WindowTransparency = 0.15,
 })
 LiquidGlass.Themes.Light = theme({
     Name = "Light",
-    Accent = Color3.fromRGB(100, 90, 240), AccentHi = Color3.fromRGB(80, 70, 220),
-    Text = Color3.fromRGB(28, 27, 45), Secondary = Color3.fromRGB(75, 72, 100), Muted = Color3.fromRGB(130, 128, 155),
-    Panel = Color3.fromRGB(255, 255, 255), Base = Color3.fromRGB(236, 236, 246),
-    Off = Color3.fromRGB(190, 188, 205), WindowTransparency = 0.08,
+    PageBg = Color3.fromRGB(232, 234, 239), Text = Color3.fromRGB(43, 47, 58),
+    Secondary = Color3.fromRGB(80, 85, 100), Muted = Color3.fromRGB(120, 125, 140),
+    Border = Color3.fromRGB(30, 33, 45), BorderT = 0.88,
+    SeparatorT = 0.9, Rim = Color3.fromRGB(255, 255, 255), RimTopT = 0.45,
+    MenuSurface = Color3.fromRGB(246, 247, 249), MenuT = 0.45,
+    ModalFrost = Color3.fromRGB(255, 255, 255), ModalFrostT = 0.56,
+    Scrim = Color3.fromRGB(20, 22, 30), ScrimT = 0.65,
+    Accent = Color3.fromRGB(79, 70, 229),
+    MeshViolet = Color3.fromRGB(139, 92, 246), MeshPink = Color3.fromRGB(236, 72, 153), MeshCyan = Color3.fromRGB(6, 182, 212),
+    MeshCornerTop = Color3.fromRGB(79, 70, 229), MeshCornerBottom = Color3.fromRGB(67, 56, 202),
+    MeshT = 0.78,
+    WindowTransparency = 0.1,
 })
 LiquidGlass.Theme = LiquidGlass.Themes.Dark
 
@@ -125,7 +144,7 @@ end
 local Creator = LiquidGlass.Creator
 
 -- Remember that `inst[prop]` should follow theme key `key` (a string such
--- as "Accent"). Pass a Color3 instead of a key anywhere and it stays fixed.
+-- as "Accent" or "TintT"). Pass a value instead of a key and it stays fixed.
 function Creator.Themed(inst, map)
     local m = Themed[inst]
     if not m then m = {} Themed[inst] = m end
@@ -149,7 +168,7 @@ end
 
 function Creator.Corner(i, r)
     local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, r or 14)
+    c.CornerRadius = r == "full" and UDim.new(1, 0) or UDim.new(0, r or 12)
     c.Parent = i
     return c
 end
@@ -162,13 +181,14 @@ function Creator.Pad(i, l, r, t, b)
     return p
 end
 
+-- cubic-bezier(0.16, 1, 0.3, 1) is close to Quint out
 function Creator.Tween(i, props, t, style, dir)
-    local tw = TweenService:Create(i, TweenInfo.new(t or 0.2, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
+    local tw = TweenService:Create(i, TweenInfo.new(t or 0.18, style or Enum.EasingStyle.Quint, dir or Enum.EasingDirection.Out), props)
     tw:Play()
     return tw
 end
 
--- color: Color3, or a theme key string ("Text", "Muted", "AccentHi", ...)
+-- color: Color3, or a theme key string ("Text", "Muted", "Accent", ...)
 function Creator.Label(parent, text, size, color, font, xalign)
     local l = Instance.new("TextLabel")
     l.BackgroundTransparency = 1
@@ -183,94 +203,130 @@ function Creator.Label(parent, text, size, color, font, xalign)
     return l
 end
 
--- Frosted glass frame: tinted panel + top sheen gradient + fading rim stroke
-function Creator.Glass(parent, transparency, radius)
-    local r = radius or 16
+-- polished edge: bright 1px top highlight fading to a hairline
+local function addRim(f, r, chip)
+    local rim = Instance.new("Frame")
+    rim.Name = "Rim"
+    rim.BackgroundTransparency = 1
+    rim.Size = UDim2.new(1, -2, 1, -2)
+    rim.Position = UDim2.fromOffset(1, 1)
+    rim.ZIndex = f.ZIndex
+    rim.Parent = f
+    Creator.Corner(rim, r == "full" and "full" or math.max(0, (r or 12) - 1))
+    local st = Instance.new("UIStroke")
+    st.Thickness = 1
+    st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    st.Parent = rim
+    Creator.Themed(st, { Color = "Rim", Transparency = "RimTopT" })
+    local g = Instance.new("UIGradient")
+    g.Rotation = 90
+    g.Transparency = chip
+        and NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.35, 1), NumberSequenceKeypoint.new(1, 1) })
+        or NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.12, 0.78), NumberSequenceKeypoint.new(1, 0.9) })
+    g.Parent = st
+    return rim
+end
+
+-- Glass surface. tier: "panel" (default), "chip", "menu", "modal"
+-- radius: px or "full". Children of a panel should paint no surface.
+function Creator.Glass(parent, tier, radius)
+    if type(tier) == "number" then tier, radius = "panel", tier end -- (parent, radius)
+    tier = tier or "panel"
+    local r = radius or (tier == "modal" and 20 or tier == "chip" and "full" or 12)
     local f = Instance.new("Frame")
     f.Name = "Glass"
-    f.BackgroundTransparency = transparency or 0.3
     f.BorderSizePixel = 0
     f.ClipsDescendants = true
     f.Parent = parent
-    Creator.Themed(f, { BackgroundColor3 = "Panel" })
+    f:SetAttribute("GlassTier", tier)
     Creator.Corner(f, r)
 
-    local sheen = Instance.new("Frame")
-    sheen.Name = "Sheen"
-    sheen.Size = UDim2.fromScale(1, 1)
-    sheen.BorderSizePixel = 0
-    sheen.ZIndex = f.ZIndex
-    sheen.Parent = f
-    Creator.Themed(sheen, { BackgroundColor3 = "Sheen" })
-    Creator.Corner(sheen, r)
-    local sg = Instance.new("UIGradient")
-    sg.Rotation = 90
-    sg.Transparency = NumberSequence.new({
-        NumberSequenceKeypoint.new(0, 0.9), NumberSequenceKeypoint.new(0.35, 0.965), NumberSequenceKeypoint.new(1, 1),
-    })
-    sg.Parent = sheen
+    if tier == "menu" then
+        Creator.Themed(f, { BackgroundColor3 = "MenuSurface", BackgroundTransparency = "MenuT" })
+    elseif tier == "modal" then
+        Creator.Themed(f, { BackgroundColor3 = "ModalFrost", BackgroundTransparency = "ModalFrostT" })
+    else
+        Creator.Themed(f, { BackgroundColor3 = "TintTop", BackgroundTransparency = "TintT" })
+        local g = Instance.new("UIGradient")
+        g.Name = "Tint"
+        g.Rotation = 90
+        g.Color = ColorSequence.new(th().TintTop, th().TintBottom)
+        g.Parent = f
+        Themed[g] = {}
+    end
 
-    local st = Instance.new("UIStroke")
-    st.Name = "Rim"
-    st.Thickness = 1.2
-    st.Transparency = 0.6
-    st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    st.Parent = f
-    Creator.Themed(st, { Color = "Rim" })
-    local rg = Instance.new("UIGradient")
-    rg.Rotation = 90
-    rg.Transparency = NumberSequence.new({
-        NumberSequenceKeypoint.new(0, 0.25), NumberSequenceKeypoint.new(0.4, 0.7), NumberSequenceKeypoint.new(1, 0.9),
-    })
-    rg.Parent = st
-    return f, st
+    local border = Instance.new("UIStroke")
+    border.Name = "Border"
+    border.Thickness = 1
+    border.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    border.Parent = f
+    Creator.Themed(border, { Color = "Border", Transparency = "BorderT" })
+
+    addRim(f, r, tier == "chip")
+    return f, border
+end
+
+-- hover: tint 6% -> 11%, like .liquid-glass--hover
+function Creator.Hover(f, hit)
+    hit = hit or f
+    hit.MouseEnter:Connect(function() Creator.Tween(f, { BackgroundTransparency = th().TintHoverT }, 0.18) end)
+    hit.MouseLeave:Connect(function() Creator.Tween(f, { BackgroundTransparency = th().TintT }, 0.18) end)
 end
 
 function Creator.PressScale(btn)
     local sc = Instance.new("UIScale")
     sc.Parent = btn
-    btn.MouseEnter:Connect(function() Creator.Tween(sc, { Scale = 1.04 }, 0.12, Enum.EasingStyle.Back) end)
-    btn.MouseLeave:Connect(function() Creator.Tween(sc, { Scale = 1 }, 0.15) end)
-    btn.MouseButton1Down:Connect(function() Creator.Tween(sc, { Scale = 0.95 }, 0.08) end)
-    btn.MouseButton1Up:Connect(function() Creator.Tween(sc, { Scale = 1.04 }, 0.14, Enum.EasingStyle.Back) end)
+    btn.MouseEnter:Connect(function() Creator.Tween(sc, { Scale = 1.03 }, 0.18) end)
+    btn.MouseLeave:Connect(function() Creator.Tween(sc, { Scale = 1 }, 0.18) end)
+    btn.MouseButton1Down:Connect(function() Creator.Tween(sc, { Scale = 0.96 }, 0.08) end)
+    btn.MouseButton1Up:Connect(function() Creator.Tween(sc, { Scale = 1.03 }, 0.16) end)
     return sc
 end
 
--- tint: nil = colourless glass; a Color3 or theme key = branded tint, rim kept
+-- Chip-tier control (pill). tint: nil = colorless; Color3 or theme key = branded
+-- (tint overrides only the fill + border, the rim stays, per the recipe)
 function Creator.Button(parent, text, tint, textColor, textSize)
     local b = Instance.new("TextButton")
+    b.Name = "Button"
     b.AutoButtonColor = false
     b.BorderSizePixel = 0
     b.Text = text or ""
-    b.Font = FONT_BOLD
-    b.TextSize = textSize or 11
+    b.Font = FONT_MED
+    b.TextSize = textSize or 12
     b.Parent = parent
-    Creator.Corner(b, 10)
-    local st = Instance.new("UIStroke")
-    st.Name = "Rim"
-    st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    st.Parent = b
+    Creator.Corner(b, "full")
+    local border = Instance.new("UIStroke")
+    border.Name = "Border"
+    border.Thickness = 1
+    border.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    border.Parent = b
     if tint then
         if type(tint) == "string" then
             Creator.Themed(b, { BackgroundColor3 = tint })
-            Creator.Themed(st, { Color = tint })
+            Creator.Themed(border, { Color = tint })
         else
             b.BackgroundColor3 = tint
-            st.Color = tint
+            border.Color = tint
         end
-        b.BackgroundTransparency = 0.72
-        st.Transparency = 0.45
+        b.BackgroundTransparency = 0.45
+        border.Transparency = 0.5
+        b.TextColor3 = th().White
     else
-        b.BackgroundColor3 = th().White
-        Creator.Themed(st, { Color = "Rim" })
-        b.BackgroundTransparency = 0.9
-        st.Transparency = 0.82
+        Creator.Themed(b, { BackgroundColor3 = "TintTop", BackgroundTransparency = "TintT" })
+        local g = Instance.new("UIGradient")
+        g.Name = "Tint"
+        g.Rotation = 90
+        g.Color = ColorSequence.new(th().TintTop, th().TintBottom)
+        g.Parent = b
+        Themed[g] = {}
+        Creator.Themed(border, { Color = "Border", Transparency = "BorderT" })
     end
     if type(textColor) == "string" then Creator.Themed(b, { TextColor3 = textColor })
-    else b.TextColor3 = textColor or th().Text end
+    elseif textColor then b.TextColor3 = textColor end
+    addRim(b, "full", true)
     Creator.PressScale(b)
-    b.MouseEnter:Connect(function() Creator.Tween(b, { BackgroundTransparency = tint and 0.55 or 0.8 }, 0.12) end)
-    b.MouseLeave:Connect(function() Creator.Tween(b, { BackgroundTransparency = tint and 0.72 or 0.9 }, 0.15) end)
+    b.MouseEnter:Connect(function() Creator.Tween(b, { BackgroundTransparency = tint and 0.3 or th().TintHoverT }, 0.18) end)
+    b.MouseLeave:Connect(function() Creator.Tween(b, { BackgroundTransparency = tint and 0.45 or th().TintT }, 0.18) end)
     return b
 end
 
@@ -293,29 +349,21 @@ function Creator.Scroller(parent, pos, size)
     s.BackgroundTransparency = 1
     s.BorderSizePixel = 0
     s.ScrollBarThickness = 3
-    s.ScrollBarImageTransparency = 0.3
+    s.ScrollBarImageTransparency = 0.6
     s.CanvasSize = UDim2.new()
     s.AutomaticCanvasSize = Enum.AutomaticSize.Y
     s.ScrollingDirection = Enum.ScrollingDirection.Y
     s.Parent = parent
-    Creator.Themed(s, { ScrollBarImageColor3 = "Accent" })
+    Creator.Themed(s, { ScrollBarImageColor3 = "Muted" })
     return s
 end
 
--- accent bar + small caps title
+-- grouped-list header: small caps, muted, no bar
 function Creator.SectionTitle(parent, text, x, y)
-    x, y = x or 12, y or 12
-    local bar = Instance.new("Frame")
-    bar.Size = UDim2.fromOffset(3, 14)
-    bar.Position = UDim2.fromOffset(x, y)
-    bar.BorderSizePixel = 0
-    bar.Parent = parent
-    Creator.Themed(bar, { BackgroundColor3 = "AccentHi" })
-    Creator.Corner(bar, 2)
-    local l = Creator.Label(parent, text, 11, "AccentHi", FONT_BOLD)
-    l.Size = UDim2.new(1, -(x + 10) - 12, 0, 16)
-    l.Position = UDim2.fromOffset(x + 10, y - 1)
-    return l, bar
+    local l = Creator.Label(parent, tostring(text or ""):upper(), 11, "Muted", FONT_MED)
+    l.Size = UDim2.new(1, -(x or 14) - 8, 0, 16)
+    l.Position = UDim2.fromOffset(x or 14, y or 6)
+    return l
 end
 
 -- round letter badge (e.g. first letter of a name) centred in a holder
@@ -327,28 +375,29 @@ function Creator.Badge(holder, letter, color, size)
     b.AnchorPoint = Vector2.new(0.5, 0.5)
     b.Position = UDim2.fromScale(0.5, 0.5)
     b.BackgroundColor3 = col(color, "Accent")
-    b.BackgroundTransparency = 0.25
+    b.BackgroundTransparency = 0.3
     b.BorderSizePixel = 0
     b.ZIndex = holder.ZIndex + 1
     b.Parent = holder
-    Creator.Corner(b, size)
-    local t = Creator.Label(b, tostring(letter or "?"):sub(1, 1):upper(), math.floor(size * 0.46), th().White, Enum.Font.GothamBlack, Enum.TextXAlignment.Center)
+    Creator.Corner(b, "full")
+    addRim(b, "full", true)
+    local t = Creator.Label(b, tostring(letter or "?"):sub(1, 1):upper(), math.floor(size * 0.46), th().White, FONT_BOLD, Enum.TextXAlignment.Center)
     t.Size = UDim2.fromScale(1, 1)
     t.ZIndex = b.ZIndex + 1
     return b
 end
 
--- glass text box; returns wrap frame and the TextBox
+-- chip-tier text field; returns wrap frame and the TextBox
 function Creator.TextBox(parent, placeholder, text, textSize)
-    local w = Creator.Glass(parent, 0.45, 9)
+    local w = Creator.Glass(parent, "chip", 9)
     local box = Instance.new("TextBox")
-    box.Size = UDim2.new(1, -16, 1, 0)
-    box.Position = UDim2.fromOffset(8, 0)
+    box.Size = UDim2.new(1, -20, 1, 0)
+    box.Position = UDim2.fromOffset(10, 0)
     box.BackgroundTransparency = 1
     box.PlaceholderText = placeholder or ""
     box.Text = text or ""
     box.Font = FONT
-    box.TextSize = textSize or 11
+    box.TextSize = textSize or 12
     box.TextXAlignment = Enum.TextXAlignment.Left
     box.ClearTextOnFocus = false
     box.ClipsDescendants = true
@@ -358,33 +407,40 @@ function Creator.TextBox(parent, placeholder, text, textSize)
     return w, box
 end
 
--- pill switch; returns controller with :Set(on, animate, silent) and .Button
+-- iOS-style switch; returns controller with :Set(on, animate, silent) and .Button
 function Creator.Switch(parent, initial, onChange)
     local track = Instance.new("TextButton")
     track.AutoButtonColor = false
     track.Text = ""
-    track.Size = UDim2.fromOffset(44, 24)
+    track.Size = UDim2.fromOffset(42, 24)
     track.BorderSizePixel = 0
     track.Parent = parent
-    Creator.Corner(track, 12)
+    Creator.Corner(track, "full")
+    addRim(track, "full", true)
     local knob = Instance.new("Frame")
-    knob.Size = UDim2.fromOffset(18, 18)
+    knob.Size = UDim2.fromOffset(20, 20)
     knob.BorderSizePixel = 0
     knob.BackgroundColor3 = th().White
     knob.ZIndex = track.ZIndex + 1
     knob.Parent = track
-    Creator.Corner(knob, 9)
+    Creator.Corner(knob, "full")
+    local ks = Instance.new("UIStroke")
+    ks.Color = th().Black
+    ks.Transparency = 0.85
+    ks.Parent = knob
     local ctl = { Button = track, Value = initial == true }
     function ctl:Paint(anim)
         local on = self.Value
-        local pos = on and UDim2.new(1, -21, 0.5, -9) or UDim2.new(0, 3, 0.5, -9)
+        local pos = on and UDim2.new(1, -22, 0.5, -10) or UDim2.new(0, 2, 0.5, -10)
         local key = on and "Green" or "Off"
+        local tr = on and 0 or th().OffT
         Themed[track] = { BackgroundColor3 = key }
         if anim then
-            Creator.Tween(track, { BackgroundColor3 = th()[key] }, 0.15)
-            Creator.Tween(knob, { Position = pos }, 0.18, Enum.EasingStyle.Back)
+            Creator.Tween(track, { BackgroundColor3 = th()[key], BackgroundTransparency = tr }, 0.18)
+            Creator.Tween(knob, { Position = pos }, 0.22)
         else
             track.BackgroundColor3 = th()[key]
+            track.BackgroundTransparency = tr
             knob.Position = pos
         end
     end
@@ -396,6 +452,55 @@ function Creator.Switch(parent, initial, onChange)
     ctl:Paint(false)
     track.MouseButton1Click:Connect(function() ctl:Set(not ctl.Value, true) end)
     return ctl
+end
+
+-- ambient mesh: off-centre glows the glass can pick up (rule 1)
+function Creator.Mesh(parent)
+    local holder = Instance.new("Frame")
+    holder.Name = "Mesh"
+    holder.BackgroundTransparency = 1
+    holder.Size = UDim2.fromScale(1, 1)
+    holder.ZIndex = parent.ZIndex
+    holder.Parent = parent
+    local spots = {
+        { key = "MeshViolet",       x = 0.42, y = 0.38, w = 0.62, h = 0.9 },
+        { key = "MeshPink",         x = 0.62, y = 0.52, w = 0.5,  h = 0.8 },
+        { key = "MeshCyan",         x = 0.48, y = 0.66, w = 0.55, h = 0.85 },
+        { key = "MeshCornerTop",    x = 0.18, y = 0.08, w = 0.6,  h = 0.7 },
+        { key = "MeshCornerBottom", x = 0.86, y = 0.95, w = 0.55, h = 0.7 },
+    }
+    for _, s in ipairs(spots) do
+        local g = Instance.new("ImageLabel")
+        g.BackgroundTransparency = 1
+        g.Image = GLOW_IMAGE
+        g.AnchorPoint = Vector2.new(0.5, 0.5)
+        g.Position = UDim2.fromScale(s.x, s.y)
+        g.Size = UDim2.fromScale(s.w, s.h)
+        g.ScaleType = Enum.ScaleType.Stretch
+        g.ZIndex = holder.ZIndex
+        g.Parent = holder
+        Creator.Themed(g, { ImageColor3 = s.key, ImageTransparency = "MeshT" })
+    end
+    return holder
+end
+
+-- soft drop shadow sprite (9-slice); caller positions it
+function Creator.Shadow(parent, spread, transparency)
+    spread = spread or 28
+    local s = Instance.new("ImageLabel")
+    s.Name = "Shadow"
+    s.BackgroundTransparency = 1
+    s.Image = SHADOW_IMAGE
+    s.ImageColor3 = Color3.new(0, 0, 0)
+    s.ImageTransparency = transparency or 0.55
+    s.ScaleType = Enum.ScaleType.Slice
+    s.SliceCenter = Rect.new(49, 49, 450, 450)
+    s.AnchorPoint = Vector2.new(0.5, 0.5)
+    s.Position = UDim2.fromScale(0.5, 0.5)
+    s.Size = UDim2.new(1, spread * 2, 1, spread * 2)
+    s.ZIndex = 1
+    s.Parent = parent
+    return s
 end
 
 -- drag `target` by holding `handle` (mouse or touch)
@@ -431,6 +536,9 @@ local function applyTheme(T)
                 local v = T[key]
                 if v ~= nil then pcall(function() inst[prop] = v end) end
             end
+            if inst:IsA("UIGradient") and inst.Name == "Tint" then
+                pcall(function() inst.Color = ColorSequence.new(T.TintTop, T.TintBottom) end)
+            end
         end
     end
     for _, w in ipairs(LiquidGlass.Windows) do
@@ -442,7 +550,7 @@ local function applyTheme(T)
     end
 end
 
--- LiquidGlass:SetTheme("Ocean") - repaints every open window
+-- LiquidGlass:SetTheme("Light") - repaints every open window
 function LiquidGlass:SetTheme(name)
     local t = type(name) == "table" and name or self.Themes[name]
     if not t then warnf("unknown theme " .. tostring(name)) return false end
@@ -469,7 +577,7 @@ local function protect(gui)
 end
 
 --==================================================================--
---  Notifications (independent of any window)
+--  Notifications (menu tier, independent of any window)
 --==================================================================--
 
 local notifyGui, notifyList
@@ -506,46 +614,38 @@ local function textHeight(text, size, font, width)
 end
 
 local notifyOrder = 0
--- LiquidGlass:Notify({ Title = "...", Content = "...", Duration = 3, Color = Color3 | theme key, Buttons = { { Title, Callback } } })
+-- LiquidGlass:Notify({ Title, Content, Duration = 3, Color = Color3 | theme key, Buttons = { { Title, Callback } } })
 function LiquidGlass:Notify(cfg)
     cfg = cfg or {}
     ensureNotify()
     local T = th()
-    local textW = NOTIFY_W - 26 - 6
+    local textW = NOTIFY_W - 30
     local hasTitle = cfg.Title and cfg.Title ~= ""
     local hasContent = cfg.Content and cfg.Content ~= ""
-    local titleH = hasTitle and textHeight(cfg.Title, 12, FONT_BOLD, textW) or 0
-    local contentH = hasContent and textHeight(cfg.Content, 11, FONT_MED, textW) or 0
+    local titleH = hasTitle and textHeight(cfg.Title, 13, FONT_BOLD, textW) or 0
+    local contentH = hasContent and textHeight(cfg.Content, 12, FONT, textW) or 0
     local buttons = cfg.Buttons
-    local btnH = (type(buttons) == "table" and #buttons > 0) and 34 or 0
-    local height = 10 + titleH + (hasTitle and hasContent and 3 or 0) + contentH + btnH + 12
+    local btnH = (type(buttons) == "table" and #buttons > 0) and 36 or 0
+    local height = 12 + titleH + (hasTitle and hasContent and 3 or 0) + contentH + btnH + 13
 
     notifyOrder = notifyOrder + 1
-    local card = Creator.Glass(notifyList, 0.1, 13)
+    local card = Creator.Glass(notifyList, "menu", 14)
     card.Size = UDim2.new(1, 0, 0, height)
     card.LayoutOrder = notifyOrder
-    local bar = Instance.new("Frame")
-    bar.Size = UDim2.new(0, 3, 1, -16)
-    bar.Position = UDim2.fromOffset(4, 8)
-    bar.BorderSizePixel = 0
-    bar.Parent = card
-    Creator.Corner(bar, 2)
-    if type(cfg.Color) == "string" then Creator.Themed(bar, { BackgroundColor3 = cfg.Color })
-    else bar.BackgroundColor3 = cfg.Color or T.AccentHi end
-
-    local y = 10
+    local accent = cfg.Color
+    local y = 12
     if hasTitle then
-        local t = Creator.Label(card, cfg.Title, 12, "Text", FONT_BOLD)
+        local t = Creator.Label(card, cfg.Title, 13, accent or "Text", FONT_BOLD)
         t.Size = UDim2.new(0, textW, 0, titleH)
-        t.Position = UDim2.fromOffset(16, y)
+        t.Position = UDim2.fromOffset(15, y)
         t.TextWrapped = true
         t.TextYAlignment = Enum.TextYAlignment.Top
         y = y + titleH + 3
     end
     if hasContent then
-        local c = Creator.Label(card, cfg.Content, 11, "Secondary", FONT_MED)
+        local c = Creator.Label(card, cfg.Content, 12, "Secondary", FONT)
         c.Size = UDim2.new(0, textW, 0, contentH)
-        c.Position = UDim2.fromOffset(16, y)
+        c.Position = UDim2.fromOffset(15, y)
         c.TextWrapped = true
         c.TextYAlignment = Enum.TextYAlignment.Top
         y = y + contentH
@@ -554,17 +654,17 @@ function LiquidGlass:Notify(cfg)
     local obj = {}
     local closed = false
     local sc = Instance.new("UIScale")
-    sc.Scale = 0.9
+    sc.Scale = 0.94
     sc.Parent = card
-    Creator.Tween(sc, { Scale = 1 }, 0.25, Enum.EasingStyle.Back)
+    Creator.Tween(sc, { Scale = 1 }, 0.3)
     function obj:Close()
         if closed then return end
         closed = true
-        Creator.Tween(sc, { Scale = 0.9 }, 0.15)
+        Creator.Tween(sc, { Scale = 0.94 }, 0.15)
         Creator.Tween(card, { BackgroundTransparency = 1 }, 0.15)
         for _, d in ipairs(card:GetDescendants()) do
             if d:IsA("TextLabel") or d:IsA("TextButton") then Creator.Tween(d, { TextTransparency = 1, BackgroundTransparency = 1 }, 0.15)
-            elseif d:IsA("Frame") then Creator.Tween(d, { BackgroundTransparency = 1 }, 0.15)
+            elseif d:IsA("Frame") or d:IsA("ImageLabel") then Creator.Tween(d, { BackgroundTransparency = 1 }, 0.15)
             elseif d:IsA("UIStroke") then Creator.Tween(d, { Transparency = 1 }, 0.15) end
         end
         task.delay(0.17, function() pcall(function() card:Destroy() end) end)
@@ -573,8 +673,8 @@ function LiquidGlass:Notify(cfg)
     if btnH > 0 then
         local holder = Instance.new("Frame")
         holder.BackgroundTransparency = 1
-        holder.Size = UDim2.new(1, -28, 0, 26)
-        holder.Position = UDim2.fromOffset(16, y + 6)
+        holder.Size = UDim2.new(1, -30, 0, 28)
+        holder.Position = UDim2.fromOffset(15, y + 8)
         holder.Parent = card
         local hl = Instance.new("UIListLayout")
         hl.FillDirection = Enum.FillDirection.Horizontal
@@ -583,8 +683,8 @@ function LiquidGlass:Notify(cfg)
         hl.Parent = holder
         for i, b in ipairs(buttons) do
             local tint = b.Tint or (i == 1 and "Accent" or nil)
-            local btn = Creator.Button(holder, b.Title or "OK", tint, tint and T.White or "Secondary", 10)
-            btn.Size = UDim2.fromOffset(math.max(60, #(b.Title or "OK") * 6 + 20), 26)
+            local btn = Creator.Button(holder, b.Title or "OK", tint, tint and T.White or "Text", 11)
+            btn.Size = UDim2.fromOffset(math.max(64, #(b.Title or "OK") * 6 + 24), 28)
             btn.LayoutOrder = i
             btn.MouseButton1Click:Connect(function()
                 if type(b.Callback) == "function" then pcall(b.Callback) end
@@ -596,13 +696,14 @@ function LiquidGlass:Notify(cfg)
     local duration = cfg.Duration or 3
     if duration > 0 then
         local prog = Instance.new("Frame")
-        prog.Size = UDim2.new(1, 0, 0, 2)
-        prog.Position = UDim2.new(0, 0, 1, -2)
+        prog.Size = UDim2.new(1, -24, 0, 2)
+        prog.Position = UDim2.new(0, 12, 1, -3)
         prog.BorderSizePixel = 0
-        prog.BackgroundTransparency = 0.3
+        prog.BackgroundTransparency = 0.4
         prog.Parent = card
-        if type(cfg.Color) == "string" then Creator.Themed(prog, { BackgroundColor3 = cfg.Color })
-        else prog.BackgroundColor3 = cfg.Color or T.AccentHi end
+        Creator.Corner(prog, "full")
+        if type(accent) == "string" then Creator.Themed(prog, { BackgroundColor3 = accent })
+        else prog.BackgroundColor3 = accent or T.Accent end
         Creator.Tween(prog, { Size = UDim2.new(0, 0, 0, 2) }, duration, Enum.EasingStyle.Linear)
         task.delay(duration, function() obj:Close() end)
     end
@@ -632,23 +733,22 @@ function Element:Destroy()
     end
     self.Frame:Destroy()
 end
--- grey out and block input (optional reason text)
+-- dim and block input (optional reason text); carried in opacity, not a border
 function Element:Lock(reason)
     if self._lock then self._lock.Text = reason or "" return self end
-    local T = self.Window.Theme
     local l = Instance.new("TextButton")
     l.AutoButtonColor = false
     l.Text = reason or ""
-    l.TextColor3 = T.Muted
-    l.Font = FONT_BOLD
-    l.TextSize = 10
-    l.BackgroundColor3 = T.Base
-    l.BackgroundTransparency = 0.45
+    l.Font = FONT_MED
+    l.TextSize = 11
+    l.TextXAlignment = Enum.TextXAlignment.Right
+    l.BackgroundTransparency = 0.55
     l.BorderSizePixel = 0
     l.Size = UDim2.fromScale(1, 1)
     l.ZIndex = self.Frame.ZIndex + 20
     l.Parent = self.Frame
-    Creator.Corner(l, 11)
+    Creator.Pad(l, 0, 14, 0, 0)
+    Creator.Themed(l, { BackgroundColor3 = "PageBg", TextColor3 = "Muted" })
     self._lock = l
     self.Locked = true
     return self
@@ -697,31 +797,6 @@ local function newElement(tab, typ, cfg, frame, titleLbl, descLbl)
     return el
 end
 
--- glass row with title + optional desc; `reserve` = px kept free on the right
-local function makeRow(tab, cfg, height, reserve)
-    reserve = reserve or 0
-    local row = Creator.Glass(tab.Content, 0.5, 11)
-    row.Name = "Row"
-    row.Size = UDim2.new(1, -4, 0, height)
-    row.LayoutOrder = tab:_nextOrder()
-    local hasDesc = type(cfg.Desc) == "string" and cfg.Desc ~= ""
-    local title = Creator.Label(row, cfg.Title or "", 11, "Text", FONT_BOLD)
-    title.TextTruncate = Enum.TextTruncate.AtEnd
-    local desc
-    if hasDesc then
-        title.Size = UDim2.new(1, -reserve - 24, 0, 14)
-        title.Position = UDim2.fromOffset(12, 7)
-        desc = Creator.Label(row, cfg.Desc, 9, "Muted", FONT)
-        desc.Size = UDim2.new(1, -reserve - 24, 0, 12)
-        desc.Position = UDim2.fromOffset(12, 24)
-        desc.TextTruncate = Enum.TextTruncate.AtEnd
-    else
-        title.Size = UDim2.new(1, -reserve - 24, 0, 44)
-        title.Position = UDim2.fromOffset(12, 0)
-    end
-    return row, title, desc
-end
-
 local function isPress(i)
     return i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch
 end
@@ -737,34 +812,105 @@ function Tab:_nextOrder()
     return self._order
 end
 
+-- grouped card: one glass surface, rows inside are transparent (rule 3)
+function Tab:_newCard()
+    local card = Creator.Glass(self.Content, "panel", 14)
+    card.Name = "Card"
+    card.Size = UDim2.new(1, -4, 0, 0)
+    card.AutomaticSize = Enum.AutomaticSize.Y
+    card.LayoutOrder = self:_nextOrder()
+    local body = Instance.new("Frame")
+    body.Name = "Body"
+    body.BackgroundTransparency = 1
+    body.Size = UDim2.new(1, 0, 0, 0)
+    body.AutomaticSize = Enum.AutomaticSize.Y
+    body.ZIndex = card.ZIndex + 1
+    body.Parent = card
+    local ll = Instance.new("UIListLayout")
+    ll.SortOrder = Enum.SortOrder.LayoutOrder
+    ll.Parent = body
+    self._card, self._cardBody, self._cardRows = card, body, 0
+    return card
+end
+function Tab:_body()
+    if not (self._card and self._card.Parent) then self:_newCard() end
+    return self._cardBody
+end
+function Tab:_endCard() self._card, self._cardBody, self._cardRows = nil, nil, 0 end
+
+-- transparent row inside the current card; `reserve` = px kept free on the right
+local function makeRow(tab, cfg, height, reserve)
+    reserve = reserve or 0
+    local body = tab:_body()
+    local row = Instance.new("Frame")
+    row.Name = "Row"
+    row.BackgroundTransparency = 1
+    row.Size = UDim2.new(1, 0, 0, height)
+    row.LayoutOrder = tab:_nextOrder()
+    row.ZIndex = body.ZIndex
+    row.Parent = body
+    local sep = Instance.new("Frame")
+    sep.Name = "Separator"
+    sep.Size = UDim2.new(1, -28, 0, 1)
+    sep.Position = UDim2.fromOffset(14, 0)
+    sep.BorderSizePixel = 0
+    sep.Visible = tab._cardRows > 0
+    sep.ZIndex = row.ZIndex
+    sep.Parent = row
+    Creator.Themed(sep, { BackgroundColor3 = "Border", BackgroundTransparency = "SeparatorT" })
+    tab._cardRows = tab._cardRows + 1
+
+    local hasDesc = type(cfg.Desc) == "string" and cfg.Desc ~= ""
+    local title = Creator.Label(row, cfg.Title or "", 13, "Text", FONT_MED)
+    title.TextTruncate = Enum.TextTruncate.AtEnd
+    title.ZIndex = row.ZIndex + 1
+    local desc
+    if hasDesc then
+        title.Size = UDim2.new(1, -reserve - 28, 0, 16)
+        title.Position = UDim2.fromOffset(14, 8)
+        desc = Creator.Label(row, cfg.Desc, 11, "Muted", FONT)
+        desc.Size = UDim2.new(1, -reserve - 28, 0, 14)
+        desc.Position = UDim2.fromOffset(14, 25)
+        desc.TextTruncate = Enum.TextTruncate.AtEnd
+        desc.ZIndex = row.ZIndex + 1
+    else
+        title.Size = UDim2.new(1, -reserve - 28, 0, height)
+        title.Position = UDim2.fromOffset(14, 0)
+    end
+    return row, title, desc
+end
+
 function Tab:Select() self.Window:SelectTab(self) return self end
 
--- Tab:Section({ Title = "PLAYERS" })
+-- Tab:Section({ Title = "Players" }) - header + a new card
 function Tab:Section(cfg)
     cfg = type(cfg) == "table" and cfg or { Title = tostring(cfg) }
+    self:_endCard()
     local f = Instance.new("Frame")
     f.BackgroundTransparency = 1
-    f.Size = UDim2.new(1, -4, 0, 26)
+    f.Size = UDim2.new(1, -4, 0, 24)
     f.LayoutOrder = self:_nextOrder()
     f.Parent = self.Content
-    local l = Creator.SectionTitle(f, (cfg.Title or ""):upper(), 4, 8)
+    local l = Creator.SectionTitle(f, cfg.Title or "", 14, 4)
     local el = newElement(self, "Section", cfg, f, l, nil)
     el._set = function(s, v) s.TitleLabel.Text = tostring(v):upper() end
+    self:_newCard()
     return el
 end
 
--- Tab:Label({ Text = "small muted note", Color = "Muted" })
+-- Tab:Label({ Text = "footer note" }) - small muted text under a card
 function Tab:Label(cfg)
     cfg = type(cfg) == "table" and cfg or { Text = tostring(cfg) }
+    self:_endCard()
     local f = Instance.new("Frame")
     f.BackgroundTransparency = 1
     f.Size = UDim2.new(1, -4, 0, 0)
     f.AutomaticSize = Enum.AutomaticSize.Y
     f.LayoutOrder = self:_nextOrder()
     f.Parent = self.Content
-    local l = Creator.Label(f, cfg.Text or "", 10, cfg.Color or "Muted", FONT)
-    l.Size = UDim2.new(1, -24, 0, 0)
-    l.Position = UDim2.fromOffset(12, 0)
+    Creator.Pad(f, 14, 14, 2, 6)
+    local l = Creator.Label(f, cfg.Text or "", 11, cfg.Color or "Muted", FONT)
+    l.Size = UDim2.new(1, 0, 0, 0)
     l.AutomaticSize = Enum.AutomaticSize.Y
     l.TextWrapped = true
     l.TextYAlignment = Enum.TextYAlignment.Top
@@ -774,48 +920,47 @@ function Tab:Label(cfg)
     return el
 end
 
--- Tab:Divider()
+-- Tab:Divider() - closes the current card, next element starts a fresh one
 function Tab:Divider()
+    self:_endCard()
     local f = Instance.new("Frame")
     f.BackgroundTransparency = 1
-    f.Size = UDim2.new(1, -4, 0, 8)
+    f.Size = UDim2.new(1, -4, 0, 6)
     f.LayoutOrder = self:_nextOrder()
     f.Parent = self.Content
-    local line = Instance.new("Frame")
-    line.Size = UDim2.new(1, -24, 0, 1)
-    line.Position = UDim2.new(0, 12, 0.5, 0)
-    line.BackgroundTransparency = 0.85
-    line.BorderSizePixel = 0
-    line.Parent = f
-    Creator.Themed(line, { BackgroundColor3 = "Rim" })
     return newElement(self, "Divider", {}, f)
 end
 
 -- Tab:Paragraph({ Title = "...", Desc = "long text" })
 function Tab:Paragraph(cfg)
     cfg = cfg or {}
-    local row = Creator.Glass(self.Content, 0.5, 11)
-    row.Size = UDim2.new(1, -4, 0, 0)
+    local row, title = makeRow(self, { Title = cfg.Title }, 0, 0)
     row.AutomaticSize = Enum.AutomaticSize.Y
-    row.LayoutOrder = self:_nextOrder()
-    Creator.Pad(row, 12, 12, 9, 9)
-    local y, title, desc = 0, nil, nil
+    Creator.Pad(row, 14, 14, 10, 10)
+    local y = 0
     if cfg.Title and cfg.Title ~= "" then
-        title = Creator.Label(row, cfg.Title, 11, "Text", FONT_BOLD)
+        title.Position = UDim2.fromOffset(0, 0)
         title.Size = UDim2.new(1, 0, 0, 0)
         title.AutomaticSize = Enum.AutomaticSize.Y
         title.TextWrapped = true
         title.TextYAlignment = Enum.TextYAlignment.Top
-        y = 18
+        y = 20
+    else
+        title:Destroy()
+        title = nil
     end
+    local desc
     if cfg.Desc and cfg.Desc ~= "" then
-        desc = Creator.Label(row, cfg.Desc, 10, "Secondary", FONT)
+        desc = Creator.Label(row, cfg.Desc, 12, "Secondary", FONT)
         desc.Position = UDim2.fromOffset(0, y)
         desc.Size = UDim2.new(1, 0, 0, 0)
         desc.AutomaticSize = Enum.AutomaticSize.Y
         desc.TextWrapped = true
         desc.TextYAlignment = Enum.TextYAlignment.Top
+        desc.ZIndex = row.ZIndex + 1
     end
+    local sep = row:FindFirstChild("Separator")
+    if sep then sep.Position = UDim2.fromOffset(0, -10) sep.Size = UDim2.new(1, 0, 0, 1) end
     return newElement(self, "Paragraph", cfg, row, title, desc)
 end
 
@@ -824,33 +969,25 @@ function Tab:Button(cfg)
     cfg = cfg or {}
     local row, title, desc = makeRow(self, cfg, 44, 20)
     if cfg.Tint then
-        local rim = row:FindFirstChild("Rim")
-        if type(cfg.Tint) == "string" then
-            Creator.Themed(row, { BackgroundColor3 = cfg.Tint })
-            if rim then Creator.Themed(rim, { Color = cfg.Tint }) end
-        else
-            Themed[row] = nil
-            row.BackgroundColor3 = cfg.Tint
-            if rim then Themed[rim] = nil rim.Color = cfg.Tint end
-        end
-        row.BackgroundTransparency = 0.78
-        if rim then rim.Transparency = 0.45 end
+        if type(cfg.Tint) == "string" then Creator.Themed(title, { TextColor3 = cfg.Tint })
+        else Themed[title] = nil title.TextColor3 = cfg.Tint end
     end
-    local arrow = Creator.Label(row, ">", 13, "Muted", FONT_BOLD, Enum.TextXAlignment.Center)
+    local arrow = Creator.Label(row, "›", 18, "Muted", FONT_MED, Enum.TextXAlignment.Center)
     arrow.Size = UDim2.fromOffset(20, 44)
-    arrow.Position = UDim2.new(1, -30, 0, 0)
+    arrow.Position = UDim2.new(1, -32, 0, 0)
+    arrow.ZIndex = row.ZIndex + 1
     local hit = Instance.new("TextButton")
     hit.BackgroundTransparency = 1
     hit.Text = ""
     hit.Size = UDim2.fromScale(1, 1)
     hit.ZIndex = row.ZIndex + 3
     hit.Parent = row
+    Creator.Themed(hit, { BackgroundColor3 = "TintTop" })
     local el = newElement(self, "Button", cfg, row, title, desc)
-    local base = cfg.Tint and 0.78 or 0.5
-    hit.MouseEnter:Connect(function() Creator.Tween(row, { BackgroundTransparency = base - 0.15 }, 0.12) Creator.Tween(arrow, { TextColor3 = self.Window.Theme.AccentHi }, 0.12) end)
-    hit.MouseLeave:Connect(function() Creator.Tween(row, { BackgroundTransparency = base }, 0.15) Creator.Tween(arrow, { TextColor3 = self.Window.Theme.Muted }, 0.15) end)
-    hit.MouseButton1Down:Connect(function() Creator.Tween(row, { BackgroundTransparency = base - 0.3 }, 0.08) end)
-    hit.MouseButton1Up:Connect(function() Creator.Tween(row, { BackgroundTransparency = base - 0.15 }, 0.12) end)
+    hit.MouseEnter:Connect(function() Creator.Tween(hit, { BackgroundTransparency = th().TintT }, 0.15) end)
+    hit.MouseLeave:Connect(function() Creator.Tween(hit, { BackgroundTransparency = 1 }, 0.18) end)
+    hit.MouseButton1Down:Connect(function() Creator.Tween(hit, { BackgroundTransparency = th().TintHoverT }, 0.06) end)
+    hit.MouseButton1Up:Connect(function() Creator.Tween(hit, { BackgroundTransparency = th().TintT }, 0.15) end)
     hit.MouseButton1Click:Connect(function() if not el.Locked then el:_fire() end end)
     function el:Click() self:_fire() end
     return el
@@ -877,23 +1014,22 @@ function Tab:Toggle(cfg)
 end
 
 -- shared bar used by Slider and Progress
-local function makeBar(row, y, zBase)
+local function makeBar(row, y)
     local track = Instance.new("Frame")
-    track.Size = UDim2.new(1, -24, 0, 6)
-    track.Position = UDim2.fromOffset(12, y)
-    track.BackgroundTransparency = 0.85
+    track.Size = UDim2.new(1, -28, 0, 5)
+    track.Position = UDim2.fromOffset(14, y)
     track.BorderSizePixel = 0
-    track.ZIndex = zBase + 1
+    track.ZIndex = row.ZIndex + 1
     track.Parent = row
-    Creator.Themed(track, { BackgroundColor3 = "Rim" })
-    Creator.Corner(track, 3)
+    Creator.Themed(track, { BackgroundColor3 = "Off", BackgroundTransparency = "OffT" })
+    Creator.Corner(track, "full")
     local fill = Instance.new("Frame")
     fill.Size = UDim2.new(0, 0, 1, 0)
     fill.BorderSizePixel = 0
     fill.ZIndex = track.ZIndex + 1
     fill.Parent = track
     Creator.Themed(fill, { BackgroundColor3 = "Accent" })
-    Creator.Corner(fill, 3)
+    Creator.Corner(fill, "full")
     return track, fill
 end
 
@@ -911,29 +1047,34 @@ function Tab:Slider(cfg)
         if dot then decimals = #s - dot end
     end
     local hasDesc = type(cfg.Desc) == "string" and cfg.Desc ~= ""
-    local h = hasDesc and 62 or 50
-    local row, title, desc = makeRow(self, cfg, h, 70)
-    if not hasDesc then title.Size = UDim2.new(1, -94, 0, 14) title.Position = UDim2.fromOffset(12, 8) end
-    local valLbl = Creator.Label(row, "", 10, "Secondary", FONT_BOLD, Enum.TextXAlignment.Right)
-    valLbl.Size = UDim2.fromOffset(70, 14)
-    valLbl.Position = UDim2.new(1, -82, 0, 8)
+    local h = hasDesc and 64 or 52
+    local row, title, desc = makeRow(self, cfg, h, 80)
+    if not hasDesc then title.Size = UDim2.new(1, -108, 0, 16) title.Position = UDim2.fromOffset(14, 9) end
+    local valLbl = Creator.Label(row, "", 12, "Secondary", FONT_MED, Enum.TextXAlignment.Right)
+    valLbl.Size = UDim2.fromOffset(80, 16)
+    valLbl.Position = UDim2.new(1, -94, 0, 9)
+    valLbl.ZIndex = row.ZIndex + 1
 
     local trackY = h - 16
-    local track, fill = makeBar(row, trackY, row.ZIndex)
+    local track, fill = makeBar(row, trackY)
     local knob = Instance.new("Frame")
-    knob.Size = UDim2.fromOffset(14, 14)
+    knob.Size = UDim2.fromOffset(16, 16)
     knob.AnchorPoint = Vector2.new(0.5, 0.5)
     knob.Position = UDim2.new(0, 0, 0.5, 0)
     knob.BackgroundColor3 = th().White
     knob.BorderSizePixel = 0
     knob.ZIndex = track.ZIndex + 2
     knob.Parent = track
-    Creator.Corner(knob, 7)
+    Creator.Corner(knob, "full")
+    local ks = Instance.new("UIStroke")
+    ks.Color = th().Black
+    ks.Transparency = 0.85
+    ks.Parent = knob
     local hit = Instance.new("TextButton")
     hit.BackgroundTransparency = 1
     hit.Text = ""
-    hit.Size = UDim2.new(1, -12, 0, 24)
-    hit.Position = UDim2.fromOffset(6, trackY - 9)
+    hit.Size = UDim2.new(1, -14, 0, 26)
+    hit.Position = UDim2.fromOffset(7, trackY - 10)
     hit.ZIndex = track.ZIndex + 3
     hit.Parent = row
 
@@ -992,13 +1133,14 @@ function Tab:Progress(cfg)
     cfg = cfg or {}
     local max = cfg.Max or 100
     local hasDesc = type(cfg.Desc) == "string" and cfg.Desc ~= ""
-    local h = hasDesc and 62 or 50
-    local row, title, desc = makeRow(self, cfg, h, 70)
-    if not hasDesc then title.Size = UDim2.new(1, -94, 0, 14) title.Position = UDim2.fromOffset(12, 8) end
-    local valLbl = Creator.Label(row, "", 10, "Secondary", FONT_BOLD, Enum.TextXAlignment.Right)
-    valLbl.Size = UDim2.fromOffset(70, 14)
-    valLbl.Position = UDim2.new(1, -82, 0, 8)
-    local _, fill = makeBar(row, h - 16, row.ZIndex)
+    local h = hasDesc and 64 or 52
+    local row, title, desc = makeRow(self, cfg, h, 80)
+    if not hasDesc then title.Size = UDim2.new(1, -108, 0, 16) title.Position = UDim2.fromOffset(14, 9) end
+    local valLbl = Creator.Label(row, "", 12, "Secondary", FONT_MED, Enum.TextXAlignment.Right)
+    valLbl.Size = UDim2.fromOffset(80, 16)
+    valLbl.Position = UDim2.new(1, -94, 0, 9)
+    valLbl.ZIndex = row.ZIndex + 1
+    local _, fill = makeBar(row, h - 16)
     if cfg.Color then
         if type(cfg.Color) == "string" then Creator.Themed(fill, { BackgroundColor3 = cfg.Color })
         else Themed[fill] = nil fill.BackgroundColor3 = cfg.Color end
@@ -1017,17 +1159,43 @@ function Tab:Progress(cfg)
     return el
 end
 
--- Tab:Dropdown({ Title, Desc, Values = {...}, Value = "x" | {"x","y"}, Multi = false, Flag, Callback(value) })
+-- popup placed under an anchor, inside the window overlay (menu tier)
+local function openPopup(Window, anchor, w, hgt, onClose)
+    local overlay = Window:_openOverlay(onClose)
+    local scale = Window._scale.Scale
+    local rel = (anchor.AbsolutePosition - Window.Main.AbsolutePosition) / scale
+    local popup = Creator.Glass(overlay, "menu", 12)
+    popup.ZIndex = overlay.ZIndex + 1
+    popup.Size = UDim2.fromOffset(w, hgt)
+    local winH = Window.Main.AbsoluteSize.Y / scale
+    local y = rel.Y + anchor.AbsoluteSize.Y / scale + 6
+    if y + hgt > winH - 8 then y = rel.Y - hgt - 6 end
+    popup.Position = UDim2.fromOffset(math.max(8, rel.X + anchor.AbsoluteSize.X / scale - w), math.max(8, y))
+    local sc = Instance.new("UIScale")
+    sc.Scale = 0.94
+    sc.Parent = popup
+    Creator.Tween(sc, { Scale = 1 }, 0.22)
+    return popup
+end
+
+-- Tab:Dropdown({ Title, Desc, Values = {...}, Value = "x" | {"x","y"}, Multi = false, Search = bool, Flag, Callback(value) })
 function Tab:Dropdown(cfg)
     cfg = cfg or {}
     local Window = self.Window
     local row, title, desc = makeRow(self, cfg, 44, 150)
-    local btn = Creator.Button(row, "", nil, "AccentHi", 10)
-    btn.Size = UDim2.fromOffset(140, 26)
-    btn.Position = UDim2.new(1, -152, 0.5, -13)
+    local btn = Creator.Button(row, "", nil, "Text", 12)
+    btn.Size = UDim2.fromOffset(140, 28)
+    btn.Position = UDim2.new(1, -154, 0.5, -14)
     btn.ZIndex = row.ZIndex + 2
     btn.TextTruncate = Enum.TextTruncate.AtEnd
-    Creator.Pad(btn, 8, 8, 0, 0)
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    Creator.Pad(btn, 12, 26, 0, 0)
+    local chev = Creator.Label(btn, "›", 16, "Muted", FONT_MED, Enum.TextXAlignment.Center)
+    chev.Size = UDim2.fromOffset(16, 16)
+    chev.AnchorPoint = Vector2.new(0.5, 0.5)
+    chev.Position = UDim2.new(1, 14, 0.5, 0)
+    chev.Rotation = 90
+    chev.ZIndex = btn.ZIndex + 1
 
     local el = newElement(self, "Dropdown", cfg, row, title, desc)
     el.Values = type(cfg.Values) == "table" and cfg.Values or {}
@@ -1061,8 +1229,10 @@ function Tab:Dropdown(cfg)
         local T = Window.Theme
         for x, b in pairs(optionButtons) do
             local on = selected(x)
-            b.TextColor3 = on and T.AccentHi or T.Secondary
-            b.BackgroundTransparency = on and 0.75 or 0.9
+            b.TextColor3 = on and T.Accent or T.Text
+            b.BackgroundTransparency = on and T.TintHoverT or 1
+            local tick = b:FindFirstChild("Tick")
+            if tick then tick.Visible = on end
         end
     end
     local function close()
@@ -1074,29 +1244,20 @@ function Tab:Dropdown(cfg)
         if popup then close() return end
         if el.Locked then return end
         local T = Window.Theme
-        local overlay = Window:_openOverlay(close)
-        local scale = Window._scale.Scale
-        local rel = (btn.AbsolutePosition - Window.Main.AbsolutePosition) / scale
         local count = #el.Values
         local searchable = cfg.Search or count > 8
-        local listTop = searchable and 36 or 6
-        local hgt = math.min(count * 27 + listTop + 6, 250)
-        popup = Creator.Glass(overlay, 0.05, 12)
-        popup.ZIndex = overlay.ZIndex + 1
-        popup.Size = UDim2.fromOffset(180, hgt)
-        local winH = Window.Main.AbsoluteSize.Y / scale
-        local y = rel.Y + btn.AbsoluteSize.Y / scale + 4
-        if y + hgt > winH - 8 then y = rel.Y - hgt - 4 end
-        popup.Position = UDim2.fromOffset(math.max(8, rel.X + btn.AbsoluteSize.X / scale - 180), math.max(8, y))
+        local listTop = searchable and 40 or 6
+        local hgt = math.min(count * 30 + listTop + 6, 260)
+        popup = openPopup(Window, btn, 190, hgt, close)
         local list = Creator.Scroller(popup, UDim2.fromOffset(6, listTop), UDim2.new(1, -12, 1, -listTop - 6))
         list.ZIndex = popup.ZIndex + 1
         local ll = Instance.new("UIListLayout")
-        ll.Padding = UDim.new(0, 3)
+        ll.Padding = UDim.new(0, 2)
         ll.SortOrder = Enum.SortOrder.LayoutOrder
         ll.Parent = list
         if searchable then
-            local wrap, box = Creator.TextBox(popup, "Search...", "", 10)
-            wrap.Size = UDim2.new(1, -12, 0, 24)
+            local wrap, box = Creator.TextBox(popup, "Search", "", 12)
+            wrap.Size = UDim2.new(1, -12, 0, 28)
             wrap.Position = UDim2.fromOffset(6, 6)
             wrap.ZIndex = popup.ZIndex + 1
             box.ZIndex = wrap.ZIndex + 1
@@ -1109,18 +1270,37 @@ function Tab:Dropdown(cfg)
             task.defer(function() pcall(function() box:CaptureFocus() end) end)
         end
         if count == 0 then
-            local l = Creator.Label(list, "No options", 10, "Muted", FONT_MED, Enum.TextXAlignment.Center)
-            l.Size = UDim2.new(1, -4, 0, 24)
+            local l = Creator.Label(list, "No options", 12, "Muted", FONT, Enum.TextXAlignment.Center)
+            l.Size = UDim2.new(1, -4, 0, 28)
             l.ZIndex = list.ZIndex + 1
         end
         for i, x in ipairs(el.Values) do
-            local b = Creator.Button(list, tostring(x), nil, T.Secondary, 10)
-            b.Size = UDim2.new(1, -4, 0, 24)
-            b.LayoutOrder = i
-            b.ZIndex = list.ZIndex + 1
+            -- menu rows are transparent (tint only on the selected one)
+            local b = Instance.new("TextButton")
+            b.AutoButtonColor = false
+            b.Text = tostring(x)
+            b.Font = FONT
+            b.TextSize = 12
+            b.TextColor3 = T.Text
             b.TextXAlignment = Enum.TextXAlignment.Left
             b.TextTruncate = Enum.TextTruncate.AtEnd
-            Creator.Pad(b, 10, 8, 0, 0)
+            b.BackgroundColor3 = T.TintTop
+            b.BackgroundTransparency = 1
+            b.BorderSizePixel = 0
+            b.Size = UDim2.new(1, -4, 0, 28)
+            b.LayoutOrder = i
+            b.ZIndex = list.ZIndex + 1
+            b.Parent = list
+            Creator.Corner(b, 8)
+            Creator.Pad(b, 10, 26, 0, 0)
+            local tick = Creator.Label(b, "✓", 12, "Accent", FONT_BOLD, Enum.TextXAlignment.Right)
+            tick.Name = "Tick"
+            tick.Size = UDim2.fromOffset(16, 28)
+            tick.Position = UDim2.new(1, 8, 0, 0)
+            tick.ZIndex = b.ZIndex + 1
+            tick.Visible = false
+            b.MouseEnter:Connect(function() if not selected(x) then b.BackgroundTransparency = T.TintT end end)
+            b.MouseLeave:Connect(function() if not selected(x) then b.BackgroundTransparency = 1 end end)
             optionButtons[x] = b
             b.MouseButton1Click:Connect(function()
                 if el.Multi then
@@ -1141,10 +1321,6 @@ function Tab:Dropdown(cfg)
             end)
         end
         paintOptions()
-        local sc = Instance.new("UIScale")
-        sc.Scale = 0.92
-        sc.Parent = popup
-        Creator.Tween(sc, { Scale = 1 }, 0.18, Enum.EasingStyle.Back)
     end
     btn.MouseButton1Click:Connect(open)
 
@@ -1177,24 +1353,24 @@ end
 function Tab:Input(cfg)
     cfg = cfg or {}
     local hasDesc = type(cfg.Desc) == "string" and cfg.Desc ~= ""
-    local h = hasDesc and 78 or 62
+    local h = hasDesc and 82 or 66
     local row, title, desc = makeRow(self, cfg, h, 0)
-    if not hasDesc then title.Size = UDim2.new(1, -24, 0, 14) title.Position = UDim2.fromOffset(12, 7) end
-    local wrap, box = Creator.TextBox(row, cfg.Placeholder or "", tostring(cfg.Value or ""), 10)
-    wrap.Size = UDim2.new(1, -24, 0, 26)
-    wrap.Position = UDim2.fromOffset(12, h - 36)
+    if not hasDesc then title.Size = UDim2.new(1, -28, 0, 16) title.Position = UDim2.fromOffset(14, 8) end
+    local wrap, box = Creator.TextBox(row, cfg.Placeholder or "", tostring(cfg.Value or ""), 12)
+    wrap.Size = UDim2.new(1, -28, 0, 30)
+    wrap.Position = UDim2.fromOffset(14, h - 40)
     wrap.ZIndex = row.ZIndex + 1
     box.ZIndex = wrap.ZIndex + 1
     local el = newElement(self, "Input", cfg, row, title, desc)
     el.Value = tostring(cfg.Value or "")
     el.Box = box
-    local rim = wrap:FindFirstChild("Rim")
+    local border = wrap:FindFirstChild("Border")
     box.Focused:Connect(function()
         if el.Locked then box:ReleaseFocus() return end
-        if rim then Creator.Tween(rim, { Color = self.Window.Theme.AccentHi, Transparency = 0.3 }, 0.12) end
+        if border then Creator.Tween(border, { Color = self.Window.Theme.Accent, Transparency = 0.4 }, 0.15) end
     end)
     box.FocusLost:Connect(function(enter)
-        if rim then Creator.Tween(rim, { Color = self.Window.Theme.Rim, Transparency = 0.6 }, 0.15) end
+        if border then Creator.Tween(border, { Color = self.Window.Theme.Border, Transparency = self.Window.Theme.BorderT }, 0.18) end
         local txt = box.Text
         if cfg.Numeric then
             local n = tonumber(txt)
@@ -1219,10 +1395,10 @@ end
 -- Tab:Keybind({ Title, Desc, Value = Enum.KeyCode.F, Flag, Callback() fires when pressed, OnChange(key) })
 function Tab:Keybind(cfg)
     cfg = cfg or {}
-    local row, title, desc = makeRow(self, cfg, 44, 96)
-    local btn = Creator.Button(row, "", nil, "AccentHi", 10)
-    btn.Size = UDim2.fromOffset(86, 26)
-    btn.Position = UDim2.new(1, -98, 0.5, -13)
+    local row, title, desc = makeRow(self, cfg, 44, 100)
+    local btn = Creator.Button(row, "", nil, "Text", 12)
+    btn.Size = UDim2.fromOffset(90, 28)
+    btn.Position = UDim2.new(1, -104, 0.5, -14)
     btn.ZIndex = row.ZIndex + 2
     local el = newElement(self, "Keybind", cfg, row, title, desc)
     el.Value = cfg.Value
@@ -1278,17 +1454,17 @@ function Tab:ColorPicker(cfg)
     local swatch = Instance.new("TextButton")
     swatch.AutoButtonColor = false
     swatch.Text = ""
-    swatch.Size = UDim2.fromOffset(44, 24)
-    swatch.Position = UDim2.new(1, -56, 0.5, -12)
+    swatch.Size = UDim2.fromOffset(44, 26)
+    swatch.Position = UDim2.new(1, -58, 0.5, -13)
     swatch.BackgroundColor3 = el.Value
     swatch.BorderSizePixel = 0
     swatch.ZIndex = row.ZIndex + 2
     swatch.Parent = row
-    Creator.Corner(swatch, 8)
+    Creator.Corner(swatch, "full")
     local sst = Instance.new("UIStroke")
-    sst.Transparency = 0.5
     sst.Parent = swatch
-    Creator.Themed(sst, { Color = "Rim" })
+    Creator.Themed(sst, { Color = "Border", Transparency = "BorderT" })
+    addRim(swatch, "full", true)
     Creator.PressScale(swatch)
 
     local popup, hexBox
@@ -1325,32 +1501,23 @@ function Tab:ColorPicker(cfg)
     local function open()
         if popup then close() return end
         if el.Locked then return end
-        local overlay = Window:_openOverlay(close)
-        local scale = Window._scale.Scale
-        local rel = (swatch.AbsolutePosition - Window.Main.AbsolutePosition) / scale
-        local W, H = 214, 196
-        popup = Creator.Glass(overlay, 0.05, 12)
-        popup.ZIndex = overlay.ZIndex + 1
-        popup.Size = UDim2.fromOffset(W, H)
-        local winH = Window.Main.AbsoluteSize.Y / scale
-        local y = rel.Y + swatch.AbsoluteSize.Y / scale + 4
-        if y + H > winH - 8 then y = rel.Y - H - 4 end
-        popup.Position = UDim2.fromOffset(math.max(8, rel.X + swatch.AbsoluteSize.X / scale - W), math.max(8, y))
+        local W, H = 224, 204
+        popup = openPopup(Window, swatch, W, H, close)
 
         svBox = Instance.new("Frame")
-        svBox.Size = UDim2.fromOffset(160, 140)
-        svBox.Position = UDim2.fromOffset(10, 10)
+        svBox.Size = UDim2.fromOffset(166, 144)
+        svBox.Position = UDim2.fromOffset(12, 12)
         svBox.BorderSizePixel = 0
         svBox.ZIndex = popup.ZIndex + 1
         svBox.Parent = popup
-        Creator.Corner(svBox, 8)
+        Creator.Corner(svBox, 10)
         local white = Instance.new("Frame")
         white.Size = UDim2.fromScale(1, 1)
         white.BackgroundColor3 = Color3.new(1, 1, 1)
         white.BorderSizePixel = 0
         white.ZIndex = svBox.ZIndex + 1
         white.Parent = svBox
-        Creator.Corner(white, 8)
+        Creator.Corner(white, 10)
         local wg = Instance.new("UIGradient")
         wg.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
         wg.Parent = white
@@ -1360,13 +1527,13 @@ function Tab:ColorPicker(cfg)
         black.BorderSizePixel = 0
         black.ZIndex = svBox.ZIndex + 2
         black.Parent = svBox
-        Creator.Corner(black, 8)
+        Creator.Corner(black, 10)
         local bg = Instance.new("UIGradient")
         bg.Rotation = 90
         bg.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0) })
         bg.Parent = black
         svCursor = Instance.new("Frame")
-        svCursor.Size = UDim2.fromOffset(12, 12)
+        svCursor.Size = UDim2.fromOffset(14, 14)
         svCursor.AnchorPoint = Vector2.new(0.5, 0.5)
         svCursor.BackgroundTransparency = 1
         svCursor.ZIndex = svBox.ZIndex + 3
@@ -1375,7 +1542,7 @@ function Tab:ColorPicker(cfg)
         cs.Color = Color3.new(1, 1, 1)
         cs.Thickness = 2
         cs.Parent = svCursor
-        Creator.Corner(svCursor, 6)
+        Creator.Corner(svCursor, "full")
         local svHit = Instance.new("TextButton")
         svHit.Text = ""
         svHit.BackgroundTransparency = 1
@@ -1386,13 +1553,13 @@ function Tab:ColorPicker(cfg)
         svHit.InputEnded:Connect(function(i) if isPress(i) then dragSV = false end end)
 
         hueBar = Instance.new("Frame")
-        hueBar.Size = UDim2.fromOffset(18, 140)
-        hueBar.Position = UDim2.fromOffset(182, 10)
+        hueBar.Size = UDim2.fromOffset(18, 144)
+        hueBar.Position = UDim2.fromOffset(190, 12)
         hueBar.BackgroundColor3 = Color3.new(1, 1, 1)
         hueBar.BorderSizePixel = 0
         hueBar.ZIndex = popup.ZIndex + 1
         hueBar.Parent = popup
-        Creator.Corner(hueBar, 6)
+        Creator.Corner(hueBar, "full")
         local hg = Instance.new("UIGradient")
         hg.Rotation = 90
         local keys = {}
@@ -1407,7 +1574,7 @@ function Tab:ColorPicker(cfg)
         hueCursor.BorderSizePixel = 0
         hueCursor.ZIndex = hueBar.ZIndex + 1
         hueCursor.Parent = hueBar
-        Creator.Corner(hueCursor, 2)
+        Creator.Corner(hueCursor, "full")
         local hueHit = Instance.new("TextButton")
         hueHit.Text = ""
         hueHit.BackgroundTransparency = 1
@@ -1418,9 +1585,9 @@ function Tab:ColorPicker(cfg)
         hueHit.InputBegan:Connect(function(i) if isPress(i) then dragHue = true fromHue(i.Position) end end)
         hueHit.InputEnded:Connect(function(i) if isPress(i) then dragHue = false end end)
 
-        local wrap, box = Creator.TextBox(popup, "#FFFFFF", "", 10)
-        wrap.Size = UDim2.fromOffset(110, 26)
-        wrap.Position = UDim2.fromOffset(10, 160)
+        local wrap, box = Creator.TextBox(popup, "#FFFFFF", "", 12)
+        wrap.Size = UDim2.fromOffset(116, 28)
+        wrap.Position = UDim2.fromOffset(12, 164)
         wrap.ZIndex = popup.ZIndex + 1
         box.ZIndex = wrap.ZIndex + 1
         hexBox = box
@@ -1433,17 +1600,12 @@ function Tab:ColorPicker(cfg)
                 box.Text = "#" .. el.Value:ToHex():upper()
             end
         end)
-        local done = Creator.Button(popup, "DONE", "Accent", th().White, 10)
-        done.Size = UDim2.fromOffset(74, 26)
-        done.Position = UDim2.fromOffset(126, 160)
+        local done = Creator.Button(popup, "Done", "Accent", th().White, 12)
+        done.Size = UDim2.fromOffset(76, 28)
+        done.Position = UDim2.fromOffset(136, 164)
         done.ZIndex = popup.ZIndex + 1
         done.MouseButton1Click:Connect(close)
-
         apply(false)
-        local sc = Instance.new("UIScale")
-        sc.Scale = 0.92
-        sc.Parent = popup
-        Creator.Tween(sc, { Scale = 1 }, 0.18, Enum.EasingStyle.Back)
     end
     swatch.MouseButton1Click:Connect(open)
     local conns = Window._conns
@@ -1464,12 +1626,13 @@ function Tab:ColorPicker(cfg)
     return el
 end
 
--- Tab:Custom({ Height = 200, Glass = true, Transparency = 0.5 }) -> element with .Frame to fill yourself
+-- Tab:Custom({ Height = 200, Glass = true }) -> element with .Frame to fill yourself (its own card)
 function Tab:Custom(cfg)
     cfg = cfg or {}
+    self:_endCard()
     local f
     if cfg.Glass ~= false then
-        f = Creator.Glass(self.Content, cfg.Transparency or 0.5, cfg.Radius or 11)
+        f = Creator.Glass(self.Content, "panel", cfg.Radius or 14)
     else
         f = Instance.new("Frame")
         f.BackgroundTransparency = 1
@@ -1484,13 +1647,14 @@ function Tab:Custom(cfg)
 end
 
 local function scrollContainer(tab, cfg, typ, layout)
-    local el = tab:Custom({ Height = cfg.Height or 220, Glass = cfg.Glass, Transparency = cfg.Transparency })
+    local el = tab:Custom({ Height = cfg.Height or 220, Glass = cfg.Glass, Radius = cfg.Radius })
     el.Type = typ
+    local top = 8
     if cfg.Title and cfg.Title ~= "" then
-        local t = Creator.SectionTitle(el.Frame, cfg.Title:upper(), 12, 12)
-        el.TitleLabel = t
+        el.TitleLabel = Creator.SectionTitle(el.Frame, cfg.Title, 14, 10)
+        el.TitleLabel.ZIndex = el.Frame.ZIndex + 1
+        top = 32
     end
-    local top = (cfg.Title and cfg.Title ~= "") and 34 or 8
     local s = Creator.Scroller(el.Frame, UDim2.fromOffset(8, top), UDim2.new(1, -16, 1, -top - 8))
     s.ZIndex = el.Frame.ZIndex + 1
     layout.Parent = s
@@ -1514,11 +1678,11 @@ function Tab:Grid(cfg)
     return scrollContainer(self, cfg, "Grid", gl)
 end
 
--- Tab:List({ Title?, Height = 220, Padding = 6 }) -> .Scroll has a UIListLayout, for card lists
+-- Tab:List({ Title?, Height = 220, Padding = 0 }) -> .Scroll has a UIListLayout, for row lists
 function Tab:List(cfg)
     cfg = cfg or {}
     local ll = Instance.new("UIListLayout")
-    ll.Padding = UDim.new(0, cfg.Padding or 6)
+    ll.Padding = UDim.new(0, cfg.Padding or 0)
     ll.SortOrder = Enum.SortOrder.LayoutOrder
     return scrollContainer(self, cfg, "List", ll)
 end
@@ -1531,10 +1695,11 @@ local Window = {}
 Window.__index = Window
 
 -- LiquidGlass:CreateWindow({
---     Title = "SAB BASE SCANNER", Author = "SpeediBoi", Size = UDim2.fromOffset(620, 460),
---     Theme = "Dark", Accent = Color3?, Folder = "LiquidGlass", SideBarWidth = 150,
+--     Title = "SAB Base Scanner", Author = "SpeediBoi", Size = UDim2.fromOffset(620, 460),
+--     Theme = "Dark" | "Light", Accent = Color3?, Folder = "LiquidGlass", SideBarWidth = 160,
 --     ToggleKey = Enum.KeyCode.RightControl, ReopenButton = true, ReopenText = "MENU",
---     Transparent = true, Blur = false, BlurSize = 14, Resizable = true, MinSize = Vector2.new(420, 300),
+--     Transparent = true, Blur = true, BlurSize = 12, Mesh = true, Shadow = true,
+--     Resizable = true, MinSize = Vector2.new(420, 300),
 -- })
 function LiquidGlass:CreateWindow(cfg)
     cfg = cfg or {}
@@ -1545,7 +1710,7 @@ function LiquidGlass:CreateWindow(cfg)
         for k, v in pairs(T) do copy[k] = v end
         copy.Name = (T.Name or "Custom") .. "+"
         copy.Accent = cfg.Accent
-        copy.AccentHi = cfg.AccentHi or cfg.Accent:Lerp(Color3.new(1, 1, 1), 0.3)
+        copy.AccentHi = cfg.AccentHi or cfg.Accent:Lerp(Color3.new(1, 1, 1), 0.25)
         T = theme(copy)
         self.Theme = T
     end
@@ -1559,13 +1724,13 @@ function LiquidGlass:CreateWindow(cfg)
 
     local self_ = setmetatable({
         Title = titleText, Theme = T, Config = cfg, Tabs = {}, Flags = {},
-        Folder = cfg.Folder or "LiquidGlass", _conns = {}, _keybinds = {}, _navOrder = 0,
+        Folder = cfg.Folder or "LiquidGlass", _conns = {}, _keybinds = {}, _navOrder = 0, _onDestroy = {},
         ToggleKey = cfg.ToggleKey, _blurOn = true,
     }, Window)
 
     local size = cfg.Size or UDim2.fromOffset(620, 460)
-    local WIN_W, WIN_H, NAV_H = size.X.Offset, size.Y.Offset, 48
-    local SIDE_W = cfg.SideBarWidth == nil and 150 or cfg.SideBarWidth
+    local WIN_W, WIN_H, NAV_H = size.X.Offset, size.Y.Offset, 44
+    local SIDE_W = cfg.SideBarWidth == nil and 160 or cfg.SideBarWidth
     self_.WIN_W, self_.WIN_H, self_.NAV_H = WIN_W, WIN_H, NAV_H
     self_.MinSize = cfg.MinSize or Vector2.new(420, 300)
     self_._transparency = cfg.Transparent == false and 0 or T.WindowTransparency
@@ -1582,6 +1747,7 @@ function LiquidGlass:CreateWindow(cfg)
 
     local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
 
+    -- page: the backdrop the glass shows (rule 1)
     local main = Instance.new("Frame")
     main.Name = "Main"
     main.Size = UDim2.fromOffset(WIN_W, WIN_H)
@@ -1591,9 +1757,10 @@ function LiquidGlass:CreateWindow(cfg)
     main.BorderSizePixel = 0
     main.Active = true
     main.ClipsDescendants = true
+    main.ZIndex = 2
     main.Parent = sg
-    Creator.Themed(main, { BackgroundColor3 = "Base" })
-    Creator.Corner(main, 26)
+    Creator.Themed(main, { BackgroundColor3 = "PageBg" })
+    Creator.Corner(main, 20)
     self_.Main = main
     local mainScale = Instance.new("UIScale")
     mainScale.Scale = math.min(1, math.max(0.45, (viewport.X - 40) / WIN_W), math.max(0.45, (viewport.Y - 40) / WIN_H))
@@ -1601,104 +1768,106 @@ function LiquidGlass:CreateWindow(cfg)
     self_._scale = mainScale
     local baseScale = mainScale.Scale
 
-    do -- window sheen + rim
-        local sheen = Instance.new("Frame")
-        sheen.Name = "Sheen"
-        sheen.Size = UDim2.fromScale(1, 1)
-        sheen.BorderSizePixel = 0
-        sheen.Parent = main
-        Creator.Themed(sheen, { BackgroundColor3 = "Sheen" })
-        Creator.Corner(sheen, 26)
-        local g = Instance.new("UIGradient")
-        g.Rotation = 135
-        g.Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 0.86), NumberSequenceKeypoint.new(0.3, 0.96), NumberSequenceKeypoint.new(1, 1),
-        })
-        g.Parent = sheen
-        local st = Instance.new("UIStroke")
-        st.Thickness = 1.5
-        st.Transparency = 0.5
-        st.Parent = main
-        Creator.Themed(st, { Color = "Rim" })
-        local stg = Instance.new("UIGradient")
-        stg.Rotation = 90
-        stg.Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 0.3), NumberSequenceKeypoint.new(0.4, 0.7), NumberSequenceKeypoint.new(1, 0.9),
-        })
-        stg.Parent = st
+    -- drop shadow sits behind the (clipped) window, so it lives beside it
+    if cfg.Shadow ~= false then
+        local s = Creator.Shadow(sg, 30, 0.6)
+        s.AnchorPoint = Vector2.new(0.5, 0.5)
+        s.ZIndex = 1
+        local ss = Instance.new("UIScale")
+        ss.Parent = s
+        local function sync()
+            s.Position = main.Position + UDim2.fromOffset(0, 9)
+            s.Size = UDim2.fromOffset(main.Size.X.Offset + 60, main.Size.Y.Offset + 60)
+            s.Visible = main.Visible
+            ss.Scale = mainScale.Scale
+        end
+        main:GetPropertyChangedSignal("Position"):Connect(sync)
+        main:GetPropertyChangedSignal("Size"):Connect(sync)
+        main:GetPropertyChangedSignal("Visible"):Connect(sync)
+        mainScale:GetPropertyChangedSignal("Scale"):Connect(sync)
+        sync()
+        self_.ShadowImage = s
     end
 
-    -- optional real blur of the world behind the glass
-    if cfg.Blur then
+    if cfg.Mesh ~= false then Creator.Mesh(main) end
+
+    do -- window border + rim
+        local st = Instance.new("UIStroke")
+        st.Thickness = 1
+        st.Parent = main
+        Creator.Themed(st, { Color = "Border", Transparency = "BorderT" })
+        addRim(main, 20, false)
+    end
+
+    -- optional real blur of the world behind the glass (backdrop-filter)
+    if cfg.Blur ~= false then
         local b = Instance.new("BlurEffect")
         b.Name = GUI_NAME .. "_Blur"
-        b.Size = cfg.BlurSize or 14
+        b.Size = cfg.BlurSize or 12
         b.Enabled = true
         b.Parent = Lighting
         self_.Blur = b
     end
 
-    -- nav bar
-    local nav = Instance.new("Frame")
+    -- topbar (glass panel)
+    local nav = Creator.Glass(main, "panel", 14)
     nav.Name = "Nav"
-    nav.Size = UDim2.new(1, 0, 0, NAV_H)
-    nav.BackgroundTransparency = 1
-    nav.Parent = main
+    nav.Size = UDim2.new(1, -24, 0, NAV_H)
+    nav.Position = UDim2.fromOffset(12, 12)
+    nav.ZIndex = 3
     self_.Nav = nav
-    local dot = Instance.new("Frame")
-    dot.Size = UDim2.fromOffset(9, 9)
-    dot.Position = UDim2.fromOffset(22, 20)
-    dot.BorderSizePixel = 0
-    dot.Parent = nav
-    Creator.Themed(dot, { BackgroundColor3 = "AccentHi" })
-    Creator.Corner(dot, 5)
-    local title = Creator.Label(nav, titleText:upper(), 15, "Text", FONT_BOLD)
-    title.Size = UDim2.new(0, 260, 1, 0)
-    title.Position = UDim2.fromOffset(40, 0)
+    local title = Creator.Label(nav, titleText, 15, "Text", FONT_BOLD)
+    title.Size = UDim2.new(0, 300, 1, 0)
+    title.Position = UDim2.fromOffset(16, 0)
     title.TextTruncate = Enum.TextTruncate.AtEnd
+    title.ZIndex = 4
     self_.TitleLabel = title
     if cfg.Author and cfg.Author ~= "" then
-        local a = Creator.Label(nav, "by " .. cfg.Author, 10, "Muted", FONT_MED)
-        a.Size = UDim2.new(0, 160, 0, 12)
-        a.Position = UDim2.fromOffset(41, 31)
-        title.Size = UDim2.new(0, 260, 0, 20)
-        title.Position = UDim2.fromOffset(40, 10)
-        dot.Position = UDim2.fromOffset(22, 16)
+        local a = Creator.Label(nav, "by " .. cfg.Author, 11, "Muted", FONT)
+        a.Size = UDim2.new(0, 200, 0, 14)
+        a.Position = UDim2.fromOffset(17, 25)
+        a.ZIndex = 4
+        title.Size = UDim2.new(0, 300, 0, 20)
+        title.Position = UDim2.fromOffset(16, 6)
     end
-    local statusLbl = Creator.Label(nav, "", 11, "Muted", FONT_MED, Enum.TextXAlignment.Right)
+    local statusLbl = Creator.Label(nav, "", 11, "Muted", FONT, Enum.TextXAlignment.Right)
     statusLbl.Size = UDim2.new(0, 260, 1, 0)
     statusLbl.Position = UDim2.new(1, -360, 0, 0)
     statusLbl.TextTruncate = Enum.TextTruncate.AtEnd
+    statusLbl.ZIndex = 4
     self_.StatusLabel = statusLbl
 
     local navRight = Instance.new("Frame")
     navRight.BackgroundTransparency = 1
-    navRight.AnchorPoint = Vector2.new(1, 0)
-    navRight.Position = UDim2.new(1, -20, 0, 10)
+    navRight.AnchorPoint = Vector2.new(1, 0.5)
+    navRight.Position = UDim2.new(1, -8, 0.5, 0)
     navRight.Size = UDim2.new(0, 400, 0, 28)
+    navRight.ZIndex = 4
     navRight.Parent = nav
     local nl = Instance.new("UIListLayout")
     nl.FillDirection = Enum.FillDirection.Horizontal
     nl.HorizontalAlignment = Enum.HorizontalAlignment.Right
+    nl.VerticalAlignment = Enum.VerticalAlignment.Center
     nl.Padding = UDim.new(0, 6)
     nl.SortOrder = Enum.SortOrder.LayoutOrder
     nl.Parent = navRight
     self_.NavRight = navRight
 
-    local minBtn = self_:NavButton("_", function() self_:Minimize() end)
+    local minBtn = self_:NavButton("–", function() self_:Minimize() end)
     minBtn.LayoutOrder = 998
-    local closeBtn = self_:NavButton("X", function() self_:Close() end, "Red")
+    local closeBtn = self_:NavButton("×", function() self_:Close() end, "Red")
     closeBtn.LayoutOrder = 999
     self_.MinButton = minBtn
 
     Creator.Draggable(nav, main)
 
-    -- reopen pill
-    local reopenText = (cfg.ReopenText or titleText):upper()
-    local reopen = Creator.Button(sg, reopenText, "Accent", T.White, 11)
-    reopen.Size = UDim2.fromOffset(math.max(84, #reopenText * 8 + 24), 30)
+    -- reopen pill (branded chip)
+    local reopenText = cfg.ReopenText or titleText
+    local reopen = Creator.Button(sg, reopenText, "Accent", T.White, 12)
+    reopen.Size = UDim2.fromOffset(math.max(84, #reopenText * 7 + 28), 32)
     reopen.Position = UDim2.fromOffset(16, 60)
     reopen.Visible = false
+    reopen.ZIndex = 5
     reopen.MouseButton1Click:Connect(function() self_:Open() end)
     Creator.Draggable(reopen)
     self_.ReopenButton = reopen
@@ -1706,34 +1875,41 @@ function LiquidGlass:CreateWindow(cfg)
     -- body
     local body = Instance.new("Frame")
     body.Name = "Body"
-    body.Size = UDim2.new(1, 0, 1, -NAV_H)
-    body.Position = UDim2.fromOffset(0, NAV_H)
+    body.Size = UDim2.new(1, 0, 1, -(NAV_H + 12))
+    body.Position = UDim2.fromOffset(0, NAV_H + 12)
     body.BackgroundTransparency = 1
+    body.ZIndex = 3
     body.Parent = main
-    Creator.Pad(body, 14, 14, 0, 14)
+    Creator.Pad(body, 12, 12, 10, 12)
     self_.Body = body
 
     local contentX = 0
     if SIDE_W > 0 then
-        local side = Creator.Glass(body, 0.4, 16)
+        local side = Creator.Glass(body, "panel", 14)
         side.Name = "SideBar"
         side.Size = UDim2.new(0, SIDE_W, 1, 0)
-        local list = Creator.Scroller(side, UDim2.fromOffset(8, 8), UDim2.new(1, -16, 1, -16))
+        side.ZIndex = 3
+        local list = Creator.Scroller(side, UDim2.fromOffset(6, 6), UDim2.new(1, -12, 1, -12))
         list.ScrollBarThickness = 2
+        list.ZIndex = 4
         local ll = Instance.new("UIListLayout")
-        ll.Padding = UDim.new(0, 5)
+        ll.Padding = UDim.new(0, 2)
         ll.SortOrder = Enum.SortOrder.LayoutOrder
         ll.Parent = list
         self_.SideBar, self_.TabList = side, list
-        contentX = SIDE_W + 12
+        contentX = SIDE_W + 10
     end
-    local content = Creator.Glass(body, 0.4, 16)
+    -- content area is transparent: the cards are the glass
+    local content = Instance.new("Frame")
     content.Name = "Content"
+    content.BackgroundTransparency = 1
     content.Size = UDim2.new(1, -contentX, 1, 0)
     content.Position = UDim2.fromOffset(contentX, 0)
+    content.ZIndex = 3
+    content.Parent = body
     self_.ContentPanel = content
 
-    -- overlay for popups (dropdowns, colour pickers); click outside to close
+    -- overlay for popups; click outside to close
     local overlay = Instance.new("Frame")
     overlay.Name = "Overlay"
     overlay.Size = UDim2.fromScale(1, 1)
@@ -1752,17 +1928,17 @@ function LiquidGlass:CreateWindow(cfg)
     end)
     self_.Overlay = overlay
 
-    -- tooltip
-    local tip = Creator.Glass(main, 0.05, 8)
+    -- tooltip (menu tier)
+    local tip = Creator.Glass(main, "menu", 8)
     tip.Visible = false
     tip.ZIndex = 180
-    tip.Size = UDim2.fromOffset(0, 24)
+    tip.Size = UDim2.fromOffset(0, 26)
     tip.AutomaticSize = Enum.AutomaticSize.X
-    local tipL = Creator.Label(tip, "", 10, "Text", FONT_MED)
-    tipL.Size = UDim2.fromOffset(0, 24)
+    local tipL = Creator.Label(tip, "", 11, "Text", FONT_MED)
+    tipL.Size = UDim2.fromOffset(0, 26)
     tipL.AutomaticSize = Enum.AutomaticSize.X
     tipL.ZIndex = 181
-    Creator.Pad(tip, 8, 8, 0, 0)
+    Creator.Pad(tip, 10, 10, 0, 0)
     self_.Tooltip, self_.TooltipLabel = tip, tipL
 
     -- resize grip
@@ -1780,12 +1956,12 @@ function LiquidGlass:CreateWindow(cfg)
         mark.Size = UDim2.fromOffset(8, 8)
         mark.AnchorPoint = Vector2.new(1, 1)
         mark.Position = UDim2.new(1, -4, 1, -4)
-        mark.BackgroundTransparency = 0.55
+        mark.BackgroundTransparency = 0.6
         mark.BorderSizePixel = 0
         mark.ZIndex = 91
         mark.Parent = grip
         Creator.Corner(mark, 3)
-        Creator.Themed(mark, { BackgroundColor3 = "Rim" })
+        Creator.Themed(mark, { BackgroundColor3 = "Muted" })
         local resizing, start, startSize
         grip.InputBegan:Connect(function(i)
             if isPress(i) and not self_._collapsed then resizing, start, startSize = true, i.Position, Vector2.new(self_.WIN_W, self_.WIN_H) end
@@ -1812,9 +1988,9 @@ function LiquidGlass:CreateWindow(cfg)
     end)
 
     -- open animation
-    mainScale.Scale = baseScale * 0.94
+    mainScale.Scale = baseScale * 0.96
     main.BackgroundTransparency = 1
-    Creator.Tween(mainScale, { Scale = baseScale }, 0.35, Enum.EasingStyle.Back)
+    Creator.Tween(mainScale, { Scale = baseScale }, 0.4)
     Creator.Tween(main, { BackgroundTransparency = self_._transparency }, 0.3)
     self_._baseScale = baseScale
 
@@ -1822,10 +1998,11 @@ function LiquidGlass:CreateWindow(cfg)
     return self_
 end
 
--- Window:NavButton("S", callback, color) -> small glass button in the title bar
+-- Window:NavButton("S", callback, color) -> circular chip control in the topbar
 function Window:NavButton(text, callback, color)
-    local b = Creator.Button(self.NavRight, text, nil, color or "Secondary", 12)
+    local b = Creator.Button(self.NavRight, text, nil, color or "Secondary", 14)
     b.Size = UDim2.fromOffset(28, 28)
+    b.ZIndex = 5
     self._navOrder = self._navOrder + 1
     b.LayoutOrder = self._navOrder
     if callback then b.MouseButton1Click:Connect(function() pcall(callback) end) end
@@ -1863,35 +2040,36 @@ function Window:_tooltip(frame, text)
     frame.MouseLeave:Connect(function() tip.Visible = false end)
 end
 
--- Window:Tab({ Title = "Main", Icon = "rbxassetid://..." })
+-- Window:Tab({ Title = "Main", Icon = "rbxassetid://..." | 123456 })
 function Window:Tab(cfg)
     cfg = type(cfg) == "table" and cfg or { Title = tostring(cfg) }
     local tab = setmetatable({
-        Title = cfg.Title or ("Tab " .. (#self.Tabs + 1)), Window = self, Elements = {}, _order = 0,
+        Title = cfg.Title or ("Tab " .. (#self.Tabs + 1)), Window = self, Elements = {}, _order = 0, _cardRows = 0,
     }, Tab)
 
-    local content = Creator.Scroller(self.ContentPanel, UDim2.fromOffset(8, 8), UDim2.new(1, -16, 1, -16))
+    local content = Creator.Scroller(self.ContentPanel, UDim2.fromOffset(0, 0), UDim2.new(1, 0, 1, 0))
     content.Visible = false
+    content.ZIndex = 3
     local ll = Instance.new("UIListLayout")
-    ll.Padding = UDim.new(0, 6)
+    ll.Padding = UDim.new(0, 8)
     ll.SortOrder = Enum.SortOrder.LayoutOrder
     ll.Parent = content
-    Creator.Pad(content, 2, 4, 2, 2)
+    Creator.Pad(content, 2, 6, 2, 8)
     tab.Content = content
 
     if self.TabList then
-        local b = Creator.Button(self.TabList, "", nil, "Muted", 11)
-        b.Size = UDim2.new(1, -4, 0, 32)
+        -- transparent tab button; the selected one carries an 11% tint pill
+        local b = Instance.new("TextButton")
+        b.AutoButtonColor = false
+        b.Text = ""
+        b.BorderSizePixel = 0
+        b.BackgroundTransparency = 1
+        b.Size = UDim2.new(1, 0, 0, 34)
         b.LayoutOrder = #self.Tabs + 1
-        local acc = Instance.new("Frame")
-        acc.Name = "Accent"
-        acc.Size = UDim2.new(0, 3, 1, -12)
-        acc.Position = UDim2.fromOffset(0, 6)
-        acc.BackgroundTransparency = 1
-        acc.BorderSizePixel = 0
-        acc.Parent = b
-        Creator.Themed(acc, { BackgroundColor3 = "AccentHi" })
-        Creator.Corner(acc, 2)
+        b.ZIndex = 4
+        b.Parent = self.TabList
+        Creator.Corner(b, 10)
+        Creator.Themed(b, { BackgroundColor3 = "TintTop" })
         local x = 12
         if cfg.Icon and cfg.Icon ~= "" then
             local img = Instance.new("ImageLabel")
@@ -1899,16 +2077,20 @@ function Window:Tab(cfg)
             img.Position = UDim2.new(0, 10, 0.5, -8)
             img.BackgroundTransparency = 1
             img.Image = type(cfg.Icon) == "number" and ("rbxassetid://" .. cfg.Icon) or cfg.Icon
+            img.ZIndex = 5
             img.Parent = b
             Creator.Themed(img, { ImageColor3 = "Muted" })
             tab.Icon = img
-            x = 32
+            x = 34
         end
-        local l = Creator.Label(b, tab.Title, 11, "Muted", FONT_BOLD)
+        local l = Creator.Label(b, tab.Title, 13, "Secondary", FONT_MED)
         l.Size = UDim2.new(1, -x - 6, 1, 0)
         l.Position = UDim2.fromOffset(x, 0)
         l.TextTruncate = Enum.TextTruncate.AtEnd
-        tab.TabButton, tab.TabLabel, tab.AccentBar = b, l, acc
+        l.ZIndex = 5
+        tab.TabButton, tab.TabLabel = b, l
+        b.MouseEnter:Connect(function() if self.CurrentTab ~= tab then Creator.Tween(b, { BackgroundTransparency = th().TintT }, 0.15) end end)
+        b.MouseLeave:Connect(function() if self.CurrentTab ~= tab then Creator.Tween(b, { BackgroundTransparency = 1 }, 0.18) end end)
         b.MouseButton1Click:Connect(function() self:SelectTab(tab) end)
     end
 
@@ -1925,14 +2107,15 @@ function Window:SelectTab(t)
         local on = tab == t
         tab.Content.Visible = on
         if tab.TabButton then
-            local key = on and "AccentHi" or "Muted"
+            local key = on and "Text" or "Secondary"
             Themed[tab.TabLabel] = { TextColor3 = key }
             Creator.Tween(tab.TabLabel, { TextColor3 = T[key] }, 0.15)
-            tab.TabButton.BackgroundTransparency = on and 0.78 or 0.9
-            Creator.Tween(tab.AccentBar, { BackgroundTransparency = on and 0 or 1 }, 0.15)
+            tab.TabLabel.Font = on and FONT_BOLD or FONT_MED
+            Creator.Tween(tab.TabButton, { BackgroundTransparency = on and T.TintHoverT or 1 }, 0.18)
             if tab.Icon then
-                Themed[tab.Icon] = { ImageColor3 = key }
-                Creator.Tween(tab.Icon, { ImageColor3 = T[key] }, 0.15)
+                local ik = on and "Accent" or "Muted"
+                Themed[tab.Icon] = { ImageColor3 = ik }
+                Creator.Tween(tab.Icon, { ImageColor3 = T[ik] }, 0.15)
             end
         end
     end
@@ -1940,10 +2123,11 @@ function Window:SelectTab(t)
     if self._overlayClose then self._overlayClose() end
 end
 
-function Window:SetTitle(t) self.Title = t self.TitleLabel.Text = tostring(t):upper() return self end
+function Window:SetTitle(t) self.Title = t self.TitleLabel.Text = tostring(t) return self end
 function Window:SetStatus(t) self.StatusLabel.Text = tostring(t or "") return self end
 function Window:SetToggleKey(k) self.ToggleKey = k return self end
 function Window:SetTheme(name) return LiquidGlass:SetTheme(name) end
+function Window:OnDestroy(fn) if type(fn) == "function" then self._onDestroy[#self._onDestroy + 1] = fn end return self end
 
 function Window:SetTransparency(a)
     self._transparency = math.clamp(tonumber(a) or 0, 0, 0.95)
@@ -1971,8 +2155,8 @@ function Window:Minimize()
     local c = self._collapsed
     self.Body.Visible = not c
     if c and self._overlayClose then self._overlayClose() end
-    Creator.Tween(self.Main, { Size = c and UDim2.fromOffset(self.WIN_W, self.NAV_H + 4) or UDim2.fromOffset(self.WIN_W, self.WIN_H) }, 0.2)
-    self.MinButton.Text = c and "^" or "_"
+    Creator.Tween(self.Main, { Size = c and UDim2.fromOffset(self.WIN_W, self.NAV_H + 24) or UDim2.fromOffset(self.WIN_W, self.WIN_H) }, 0.25)
+    self.MinButton.Text = c and "+" or "–"
 end
 
 function Window:Close()
@@ -1998,41 +2182,42 @@ function Window:IsOpen() return self.Main.Visible end
 function Window:Notify(cfg) return LiquidGlass:Notify(cfg) end
 
 -- Window:Dialog({ Title, Content, Buttons = { { Title = "OK", Callback = fn, Tint = Color3 | key }, ... } })
+-- modal tier: scrim + frost so the text stays readable
 function Window:Dialog(cfg)
     cfg = cfg or {}
     local T = self.Theme
     local dim = Instance.new("TextButton")
     dim.Text = ""
     dim.AutoButtonColor = false
-    dim.BackgroundColor3 = Color3.new(0, 0, 0)
     dim.BackgroundTransparency = 1
     dim.Size = UDim2.fromScale(1, 1)
     dim.ZIndex = 190
     dim.Parent = self.Main
-    Creator.Tween(dim, { BackgroundTransparency = 0.45 }, 0.2)
+    Creator.Themed(dim, { BackgroundColor3 = "Scrim" })
+    Creator.Tween(dim, { BackgroundTransparency = T.ScrimT }, 0.2)
 
     local width = cfg.Width or 320
-    local textW = width - 32
-    local titleH = (cfg.Title and cfg.Title ~= "") and 18 or 0
-    local contentH = (cfg.Content and cfg.Content ~= "") and textHeight(cfg.Content, 11, FONT, textW) or 0
-    local height = 14 + titleH + (titleH > 0 and contentH > 0 and 6 or 0) + contentH + 14 + 30 + 14
+    local textW = width - 36
+    local titleH = (cfg.Title and cfg.Title ~= "") and 20 or 0
+    local contentH = (cfg.Content and cfg.Content ~= "") and textHeight(cfg.Content, 12, FONT, textW) or 0
+    local height = 16 + titleH + (titleH > 0 and contentH > 0 and 6 or 0) + contentH + 16 + 32 + 16
 
-    local panel = Creator.Glass(self.Main, 0.06, 16)
+    local panel = Creator.Glass(self.Main, "modal", 20)
     panel.AnchorPoint = Vector2.new(0.5, 0.5)
     panel.Position = UDim2.fromScale(0.5, 0.5)
     panel.Size = UDim2.fromOffset(width, height)
     panel.ZIndex = 191
-    local y = 14
+    local y = 16
     if titleH > 0 then
-        local t = Creator.Label(panel, cfg.Title, 14, "Text", FONT_BOLD)
-        t.Size = UDim2.new(1, -32, 0, 18)
-        t.Position = UDim2.fromOffset(16, y)
+        local t = Creator.Label(panel, cfg.Title, 15, "Text", FONT_BOLD)
+        t.Size = UDim2.new(1, -36, 0, 20)
+        t.Position = UDim2.fromOffset(18, y)
         t.ZIndex = 192
-        y = y + 18 + 6
+        y = y + 20 + 6
     end
     if contentH > 0 then
-        local c = Creator.Label(panel, cfg.Content, 11, "Secondary", FONT)
-        c.Position = UDim2.fromOffset(16, y)
+        local c = Creator.Label(panel, cfg.Content, 12, "Secondary", FONT)
+        c.Position = UDim2.fromOffset(18, y)
         c.Size = UDim2.new(0, textW, 0, contentH)
         c.TextWrapped = true
         c.TextYAlignment = Enum.TextYAlignment.Top
@@ -2041,8 +2226,8 @@ function Window:Dialog(cfg)
     end
     local rowHolder = Instance.new("Frame")
     rowHolder.BackgroundTransparency = 1
-    rowHolder.Size = UDim2.new(1, -32, 0, 30)
-    rowHolder.Position = UDim2.fromOffset(16, y + 14)
+    rowHolder.Size = UDim2.new(1, -36, 0, 32)
+    rowHolder.Position = UDim2.fromOffset(18, y + 16)
     rowHolder.ZIndex = 192
     rowHolder.Parent = panel
     local hl = Instance.new("UIListLayout")
@@ -2052,21 +2237,21 @@ function Window:Dialog(cfg)
     hl.SortOrder = Enum.SortOrder.LayoutOrder
     hl.Parent = rowHolder
     local sc = Instance.new("UIScale")
-    sc.Scale = 0.9
+    sc.Scale = 0.94
     sc.Parent = panel
-    Creator.Tween(sc, { Scale = 1 }, 0.22, Enum.EasingStyle.Back)
+    Creator.Tween(sc, { Scale = 1 }, 0.28)
 
     local dlg = {}
     function dlg:Close()
         Creator.Tween(dim, { BackgroundTransparency = 1 }, 0.15)
-        Creator.Tween(sc, { Scale = 0.9 }, 0.15)
+        Creator.Tween(sc, { Scale = 0.94 }, 0.15)
         task.delay(0.16, function() pcall(function() dim:Destroy() panel:Destroy() end) end)
     end
     local buttons = cfg.Buttons or { { Title = "OK" } }
     for i, b in ipairs(buttons) do
         local tint = b.Tint or (i == 1 and "Accent" or nil)
-        local btn = Creator.Button(rowHolder, b.Title or "OK", tint, tint and T.White or "Secondary", 11)
-        btn.Size = UDim2.fromOffset(math.max(70, #(b.Title or "OK") * 7 + 24), 30)
+        local btn = Creator.Button(rowHolder, b.Title or "OK", tint, tint and T.White or "Text", 12)
+        btn.Size = UDim2.fromOffset(math.max(74, #(b.Title or "OK") * 7 + 28), 32)
         btn.LayoutOrder = i
         btn.ZIndex = 193
         btn.MouseButton1Click:Connect(function()
@@ -2079,6 +2264,9 @@ function Window:Dialog(cfg)
 end
 
 function Window:Destroy()
+    if self._destroyed then return end
+    self._destroyed = true
+    for _, fn in ipairs(self._onDestroy) do pcall(fn) end
     for _, c in ipairs(self._conns) do pcall(function() c:Disconnect() end) end
     for i, w in ipairs(LiquidGlass.Windows) do
         if w == self then table.remove(LiquidGlass.Windows, i) break end
@@ -2087,7 +2275,7 @@ function Window:Destroy()
         if LiquidGlass.Flags[flag] == el then LiquidGlass.Flags[flag] = nil end
     end
     if self.Blur then pcall(function() self.Blur:Destroy() end) end
-    Creator.Tween(self._scale, { Scale = self._baseScale * 0.94 }, 0.18)
+    Creator.Tween(self._scale, { Scale = self._baseScale * 0.96 }, 0.18)
     Creator.Tween(self.Main, { BackgroundTransparency = 1 }, 0.18)
     local sg = self.Gui
     task.delay(0.2, function() pcall(function() sg:Destroy() end) end)
@@ -2190,7 +2378,7 @@ function Window:AddSettingsTab(cfg)
     })
     if self.Blur then
         tab:Toggle({
-            Title = "Background blur", Desc = "blurs the world behind the glass", Value = true,
+            Title = "Background blur", Desc = "Frosts the world behind the glass", Value = true,
             Flag = cfg.Flag ~= false and "LG_Blur" or nil,
             Callback = function(on) w:SetBlur(on) end,
         })
@@ -2198,11 +2386,11 @@ function Window:AddSettingsTab(cfg)
 
     tab:Section({ Title = "Window" })
     tab:Keybind({
-        Title = "Toggle key", Desc = "show / hide the window", Value = self.ToggleKey,
+        Title = "Toggle key", Desc = "Show or hide the window", Value = self.ToggleKey,
         Flag = cfg.Flag ~= false and "LG_ToggleKey" or nil,
         OnChange = function(k) w.ToggleKey = k end,
     })
-    tab:Button({ Title = "Hide window", Desc = "the reopen pill brings it back", Callback = function() w:Close() end })
+    tab:Button({ Title = "Hide window", Desc = "The pill in the corner brings it back", Callback = function() w:Close() end })
     tab:Button({ Title = "Destroy UI", Tint = "Red", Callback = function()
         w:Dialog({
             Title = "Destroy UI?", Content = "This closes the window and removes every element. Re-run the script to get it back.",
@@ -2214,7 +2402,7 @@ function Window:AddSettingsTab(cfg)
         tab:Section({ Title = "Config" })
         local nameBox = tab:Input({ Title = "Config name", Placeholder = "default", Value = "default" })
         local list = tab:Dropdown({ Title = "Saved configs", Values = self:ListConfigs(), Search = true })
-        tab:Button({ Title = "Save", Desc = "writes every flagged element to the name above", Callback = function()
+        tab:Button({ Title = "Save", Desc = "Writes every flagged element to the name above", Callback = function()
             local n = nameBox.Value ~= "" and nameBox.Value or "default"
             local ok = w:SaveConfig(n)
             list:Refresh(w:ListConfigs(), true)
@@ -2226,7 +2414,7 @@ function Window:AddSettingsTab(cfg)
             local ok = w:LoadConfig(n)
             LiquidGlass:Notify({ Title = ok and "Config loaded" or "Load failed", Content = n, Color = ok and "Green" or "Red" })
         end })
-        tab:Toggle({ Title = "Auto save", Desc = "save on every change to the name above", Callback = function(on)
+        tab:Toggle({ Title = "Auto save", Desc = "Save on every change to the name above", Callback = function(on)
             w._autosave = on and (nameBox.Value ~= "" and nameBox.Value or "default") or nil
         end })
     end
